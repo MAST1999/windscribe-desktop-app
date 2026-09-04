@@ -86,5 +86,7 @@ elseif(UNIX)
         linuxutils.h
         network_utils/network_utils_linux.cpp
         network_utils/network_utils_linux.h
+        steamgames.cpp
+        steamgames.h
     )
 endif()
