@@ -73,3 +73,5 @@ target_include_directories(helper PRIVATE
 install(TARGETS helper
     RUNTIME DESTINATION .
 )
+
+add_subdirectory(tests)
