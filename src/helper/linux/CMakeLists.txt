@@ -60,6 +60,11 @@ set(SOURCES
 add_executable(helper ${SOURCES})
 set_property(TARGET helper PROPERTY COMPILE_WARNING_AS_ERROR ON)
 
+# pstream.h (vendored) does enum-enum arithmetic that newer GCC deprecates; keep -Werror for our
+# code but don't fail the build inside the vendored header.
+set_source_files_properties(utils.cpp PROPERTIES
+    COMPILE_OPTIONS "-Wno-deprecated-enum-enum-conversion")
+
 target_link_libraries(helper
                       PRIVATE
                       pthread

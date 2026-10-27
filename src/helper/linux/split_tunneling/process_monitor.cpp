@@ -23,7 +23,7 @@
 #include "cgroups.h"
 #include "path_matching.h"
 #include "regex_matching.h"
-#include "../common/validation_posix.h"
+#include "../../common/validation_posix.h"
 #include "../utils.h"
 
 #define SEND_MESSAGE_LEN (NLMSG_LENGTH(sizeof(struct cn_msg) + sizeof(enum proc_cn_mcast_op)))
@@ -610,7 +610,7 @@ bool ProcessMonitor::compareCmd(pid_t pid, const std::vector<AppRule> &rules) {
                 argv = readArgv(pid);
                 argvRead = true;
             }
-            if (regex_matching::regexRuleMatches(*rule.pattern, cmd, argv.get(), wineHost)) {
+            if (regex_matching::regexRuleMatches(*rule.pattern, cmd, argv ? &*argv : nullptr, wineHost)) {
                 return true;
             }
             continue;
