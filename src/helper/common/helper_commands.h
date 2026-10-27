@@ -105,7 +105,12 @@ enum class HelperCommand {
     resetMacAddresses,
     setOpenVpnDcoMode,
     installerStageAndVerify,
-    installerCleanupStaged
+    installerCleanupStaged,
+
+    // Common. Appended LAST so every pre-existing command id stays byte-stable for mixed-version
+    // client/helper pairs. Helpers that predate this id log "Unknown command id" and answer empty;
+    // clients that predate it simply never send it.
+    setSplitTunnelingSettingsV2
 };
 
 

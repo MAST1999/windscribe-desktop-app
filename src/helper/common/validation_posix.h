@@ -93,6 +93,18 @@ bool isValidUsername(const std::string &name);
 // smuggled newline could be reinterpreted as a new record.
 bool isPrintableSingleLineAscii(const std::string &v);
 
+// ISO 3166-1 alpha-2 country code: exactly two ASCII letters (either case). Used for
+// split-tunneling country rules before they are lowercased and matched against the GeoIP index.
+bool isValidCountryCode(const std::string &cc);
+
+// Structural sanity for user-supplied regex patterns: non-empty, <= 512 bytes, printable
+// single-line ASCII. The authoritative validation is the RE2 compile itself (linear-time engine,
+// so any pattern it accepts is safe to execute).
+bool isSaneRegexPattern(const std::string &pattern);
+
+// ASCII lowercasing for country codes / other short identifier strings.
+std::string toLowerAscii(std::string v);
+
 // Returns true if the value is non-empty and passes isPrintableSingleLineAscii; otherwise
 // logs an error naming fieldName and returns false. Used for WireGuard UAPI key fields
 // (private_key/public_key/preshared_key) before they are written as line-oriented records.

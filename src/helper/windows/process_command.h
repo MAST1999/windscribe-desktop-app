@@ -7,6 +7,7 @@
 #include "../common/helper_commands.h"
 
 std::string setSplitTunnelingSettings(const std::string &pars);
+std::string setSplitTunnelingSettingsV2(const std::string &pars);
 std::string sendConnectStatus(const std::string &pars);
 std::string changeMtu(const std::string &pars);
 std::string executeOpenVPN(const std::string &pars, HANDLE clientPipe);
@@ -58,6 +59,7 @@ std::string installerCleanupStaged(const std::string &pars);
 
 static const std::map<const HelperCommand, std::function<std::string(const std::string &)>> kCommands = {
     { HelperCommand::setSplitTunnelingSettings, setSplitTunnelingSettings },
+    { HelperCommand::setSplitTunnelingSettingsV2, setSplitTunnelingSettingsV2 },
     { HelperCommand::sendConnectStatus, sendConnectStatus },
     { HelperCommand::changeMtu, changeMtu },
     // executeOpenVPN is dispatched directly by processCommand (needs the client pipe handle).

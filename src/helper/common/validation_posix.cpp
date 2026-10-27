@@ -411,6 +411,39 @@ bool isPrintableSingleLineAscii(const std::string &v)
     return true;
 }
 
+bool isValidCountryCode(const std::string &cc)
+{
+    if (cc.size() != 2) {
+        return false;
+    }
+    for (char c : cc) {
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isSaneRegexPattern(const std::string &pattern)
+{
+    // Structural bounds only — RE2's compile step is the real validator and its linear-time
+    // guarantee makes any accepted pattern safe to run. Non-ASCII patterns are legal in RE2, but
+    // split-tunnel path/domain matching is ASCII in practice, so the printable-ASCII bound doubles
+    // as IPC hygiene.
+    constexpr std::size_t kMaxPatternLen = 512;
+    return !pattern.empty() && pattern.size() <= kMaxPatternLen && isPrintableSingleLineAscii(pattern);
+}
+
+std::string toLowerAscii(std::string v)
+{
+    for (char &c : v) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return v;
+}
+
 bool isValidUsername(const std::string &name)
 {
     if (name.empty()) {

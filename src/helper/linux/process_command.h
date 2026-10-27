@@ -8,6 +8,7 @@
 
 std::string getHelperVersion(const std::string &pars);
 std::string setSplitTunnelingSettings(const std::string &pars);
+std::string setSplitTunnelingSettingsV2(const std::string &pars);
 std::string sendConnectStatus(const std::string &pars);
 std::string changeMtu(const std::string &pars);
 std::string executeOpenVPN(const std::string &pars, uid_t clientUid);
@@ -57,7 +58,8 @@ static const std::map<const HelperCommand, std::function<std::string(const std::
     { HelperCommand::clearWifiHistoryData, clearWifiHistoryData },
     { HelperCommand::setOpenVpnDcoMode, setOpenVpnDcoMode },
     { HelperCommand::installerStageAndVerify, installerStageAndVerify },
-    { HelperCommand::installerCleanupStaged, installerCleanupStaged }
+    { HelperCommand::installerCleanupStaged, installerCleanupStaged },
+    { HelperCommand::setSplitTunnelingSettingsV2, setSplitTunnelingSettingsV2 }
 };
 
 std::string processCommand(HelperCommand cmdId, const std::string &pars, uid_t clientUid);

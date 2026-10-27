@@ -132,6 +132,26 @@ std::string setSplitTunnelingSettings(const std::string &pars)
     return std::string();
 }
 
+// v2 split-tunneling intake. Windows parses the extended payload and forwards the V1 subset: the
+// regex/country rule kinds are Linux enforcement for now (see docs/plans/split-tunneling-regex-and-country.md,
+// §5.6 — Windows adoption maps countries onto the WFP provider-context blob later; regex process
+// rules need callout-driver work). Parsing (rather than ignoring the command) keeps the frame in
+// sync and lets this log what a newer client asked for.
+std::string setSplitTunnelingSettingsV2(const std::string &pars)
+{
+    bool isActive, isExclude, isAllowLanTraffic;
+    std::vector<std::wstring> files, ips, hosts_wstr;
+    std::vector<std::string> regexProcessRules, regexDomainRules, countryCodes;
+    std::string geoipDatabasePath;
+    deserializePars(pars, isActive, isExclude, isAllowLanTraffic, files, ips, hosts_wstr,
+                    regexProcessRules, regexDomainRules, countryCodes, geoipDatabasePath);
+
+    spdlog::info("setSplitTunnelingSettingsV2: received {} process regexes, {} domain regexes, {} country codes; "
+                 "Windows enforces only the V1 subset in this version",
+                 regexProcessRules.size(), regexDomainRules.size(), countryCodes.size());
+    return setSplitTunnelingSettings(serializeResult(isActive, isExclude, isAllowLanTraffic, files, ips, hosts_wstr));
+}
+
 std::string sendConnectStatus(const std::string &pars)
 {
     WS_DEBUG_TRACE_SCOPE("sendConnectStatus");

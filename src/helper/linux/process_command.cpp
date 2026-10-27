@@ -1,5 +1,6 @@
 #include "process_command.h"
 
+#include <algorithm>
 #include <fcntl.h>
 #include <fstream>
 #include <sstream>
@@ -63,6 +64,60 @@ std::string setSplitTunnelingSettings(const std::string &pars)
     }
 
     SplitTunneling::instance().setSplitTunnelingParams(isActive, isExclude, files, ips, hosts, isAllowLanTraffic);
+    return std::string();
+}
+
+std::string setSplitTunnelingSettingsV2(const std::string &pars)
+{
+    bool isActive, isExclude, isAllowLanTraffic;
+    std::vector<std::string> files, ips, hosts, regexProcessRules, regexDomainRules, countryCodes;
+    std::string geoipDatabasePath;
+    deserializePars(pars, isActive, isExclude, isAllowLanTraffic, files, ips, hosts,
+                    regexProcessRules, regexDomainRules, countryCodes, geoipDatabasePath);
+
+    // V1 posture for IPs: a malformed IP is a client bug, so reject the whole command.
+    for (const auto &ip : ips) {
+        if (!Validation::isValidIpCidr(ip)) {
+            spdlog::error("setSplitTunnelingSettingsV2: invalid IP \"{}\", rejecting", ip);
+            return std::string();
+        }
+    }
+
+    // New-kind entries are sanitized, never command-rejecting: drop the invalid ones and apply the
+    // valid remainder (same posture as the Windows V1 handler). RE2 compile is the authoritative
+    // regex validation and happens later on the rules worker thread; this keeps garbage patterns
+    // out of helper state. geoipDatabasePath is NOT validated here beyond NUL-safety — a missing or
+    // garbage file must degrade to "no country rules", not to a failed ST start.
+    auto sanitize = [](std::vector<std::string> &v, const char *what, bool (*ok)(const std::string &)) {
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const std::string &s) {
+            if (ok(s)) {
+                return false;
+            }
+            spdlog::error("setSplitTunnelingSettingsV2: dropping invalid {} \"{}\"", what, s);
+            return true;
+        }), v.end());
+    };
+    sanitize(regexProcessRules, "process regex", Validation::isSaneRegexPattern);
+    sanitize(regexDomainRules, "domain regex", Validation::isSaneRegexPattern);
+    sanitize(countryCodes, "country code", Validation::isValidCountryCode);
+    for (auto &cc : countryCodes) {
+        cc = Validation::toLowerAscii(cc);
+    }
+    std::sort(countryCodes.begin(), countryCodes.end());
+    countryCodes.erase(std::unique(countryCodes.begin(), countryCodes.end()), countryCodes.end());
+    if (geoipDatabasePath.find('\0') != std::string::npos) {
+        geoipDatabasePath.clear();
+    }
+
+    spdlog::info("setSplitTunnelingSettingsV2: isActive: {}, isExclude: {}, files: {}, ips: {}, hosts: {}, "
+                 "processRegexes: {}, domainRegexes: {}, countries: {}, geoipDb: \"{}\"",
+                 isActive, isExclude, files.size(), ips.size(), hosts.size(),
+                 regexProcessRules.size(), regexDomainRules.size(), countryCodes.size(),
+                 geoipDatabasePath.empty() ? "<none>" : geoipDatabasePath);
+
+    SplitTunneling::instance().setSplitTunnelingParamsV2(isActive, isExclude, isAllowLanTraffic, files, ips, hosts,
+                                                         regexProcessRules, regexDomainRules, countryCodes,
+                                                         geoipDatabasePath);
     return std::string();
 }
 
