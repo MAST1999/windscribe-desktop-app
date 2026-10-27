@@ -106,6 +106,8 @@ target_sources(gui PRIVATE
     splittunnelingwindow/splittunnelingaddressesgroup.h
     splittunnelingwindow/splittunnelingaddresseswindowitem.cpp
     splittunnelingwindow/splittunnelingaddresseswindowitem.h
+    splittunnelingwindow/splittunnelingcountriesgroup.cpp
+    splittunnelingwindow/splittunnelingcountriesgroup.h
     splittunnelingwindow/splittunnelingappsgroup.cpp
     splittunnelingwindow/splittunnelingappsgroup.h
     splittunnelingwindow/splittunnelingappsitem.cpp

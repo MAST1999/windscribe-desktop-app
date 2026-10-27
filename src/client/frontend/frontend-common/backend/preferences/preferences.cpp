@@ -668,6 +668,21 @@ QList<types::SplitTunnelingNetworkRoute> Preferences::splitTunnelingNetworkRoute
     return guiSettings_.splitTunneling.networkRoutes.toList();
 }
 
+QString Preferences::splitTunnelingGeoIpDatabase()
+{
+    return guiSettings_.splitTunneling.geoipDatabasePath;
+}
+
+void Preferences::setSplitTunnelingGeoIpDatabase(const QString &path)
+{
+    if (guiSettings_.splitTunneling.geoipDatabasePath != path)
+    {
+        guiSettings_.splitTunneling.geoipDatabasePath = path;
+        saveGuiSettings();
+        emit splitTunnelingChanged(guiSettings_.splitTunneling);
+    }
+}
+
 void Preferences::setSplitTunnelingNetworkRoutes(QList<types::SplitTunnelingNetworkRoute> routes)
 {
     if (guiSettings_.splitTunneling.networkRoutes.toList() != routes)

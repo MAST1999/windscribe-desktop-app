@@ -22,6 +22,14 @@ SplitTunnelingAddressesWindowItem::SplitTunnelingAddressesWindowItem(ScalableGra
     addItem(addressesGroup_);
     setFocusProxy(addressesGroup_);
 
+    countriesGroup_ = new SplitTunnelingCountriesGroup(this);
+    connect(countriesGroup_, &SplitTunnelingCountriesGroup::routesUpdated, this, &SplitTunnelingAddressesWindowItem::onCountriesUpdated);
+    connect(countriesGroup_, &SplitTunnelingCountriesGroup::geoIpDatabasePathChanged, this, &SplitTunnelingAddressesWindowItem::onGeoIpDatabasePathChanged);
+    connect(countriesGroup_, &SplitTunnelingCountriesGroup::setError, this, &SplitTunnelingAddressesWindowItem::onError);
+    connect(countriesGroup_, &SplitTunnelingCountriesGroup::escape, this, &SplitTunnelingAddressesWindowItem::escape);
+    connect(countriesGroup_, &SplitTunnelingCountriesGroup::clearError, this, &SplitTunnelingAddressesWindowItem::onClearError);
+    addItem(countriesGroup_);
+
     connect(preferences_, &Preferences::splitTunnelingChanged, this, &SplitTunnelingAddressesWindowItem::onPreferencesChanged);
     onPreferencesChanged();
 
@@ -47,6 +55,16 @@ void SplitTunnelingAddressesWindowItem::onAddressesUpdated(QList<types::SplitTun
     emit addressesUpdated(addresses); // tell other screens about change
 }
 
+void SplitTunnelingAddressesWindowItem::onCountriesUpdated(QList<types::SplitTunnelingNetworkRoute> routes)
+{
+    preferences_->setSplitTunnelingNetworkRoutes(routes);
+}
+
+void SplitTunnelingAddressesWindowItem::onGeoIpDatabasePathChanged(const QString &path)
+{
+    preferences_->setSplitTunnelingGeoIpDatabase(path);
+}
+
 void SplitTunnelingAddressesWindowItem::onError(QString msg)
 {
     desc_->setDescription(msg, true);
@@ -69,6 +87,7 @@ void SplitTunnelingAddressesWindowItem::setLoggedIn(bool loggedIn)
     }
 
     addressesGroup_->setLoggedIn(loggedIn);
+    countriesGroup_->setLoggedIn(loggedIn);
 }
 
 void SplitTunnelingAddressesWindowItem::onLanguageChanged()
@@ -79,6 +98,8 @@ void SplitTunnelingAddressesWindowItem::onLanguageChanged()
 void SplitTunnelingAddressesWindowItem::onPreferencesChanged()
 {
     addressesGroup_->setAddresses(preferences_->splitTunnelingNetworkRoutes());
+    countriesGroup_->setRoutes(preferences_->splitTunnelingNetworkRoutes());
+    countriesGroup_->setGeoIpDatabasePath(preferences_->splitTunnelingGeoIpDatabase());
 }
 
 } // namespace

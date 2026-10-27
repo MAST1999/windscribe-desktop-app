@@ -21,7 +21,7 @@ SplitTunnelingAddressesGroup::SplitTunnelingAddressesGroup(ScalableGraphicsObjec
 
 void SplitTunnelingAddressesGroup::setAddresses(QList<types::SplitTunnelingNetworkRoute> addresses)
 {
-    if (addresses == addresses_.values()) {
+    if (addresses == addresses_.values() && passthrough_.isEmpty()) {
         return;
     }
     for (AddressItem *item : addresses_.keys()) {
@@ -30,17 +30,26 @@ void SplitTunnelingAddressesGroup::setAddresses(QList<types::SplitTunnelingNetwo
     }
     numDomains_ = 0;
     numIpRoutes_ = 0;
+    // Entries edited by other groups (country rules, domain regexes) are not displayed here but
+    // MUST survive this group's write-backs, which replace the whole routes list.
+    passthrough_.clear();
+    for (int i = addresses.size() - 1; i >= 0; --i) {
+        if (addresses[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY ||
+            addresses[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
+            passthrough_.prepend(addresses.takeAt(i));
+        }
+    }
 
     for (types::SplitTunnelingNetworkRoute addr : addresses) {
         addAddressInternal(addr);
     }
-    emit addressesUpdated(addresses_.values());
+    emit addressesUpdated(addresses_.values() + passthrough_);
 }
 
 void SplitTunnelingAddressesGroup::addAddress(types::SplitTunnelingNetworkRoute &address)
 {
     addAddressInternal(address);
-    emit addressesUpdated(addresses_.values());
+    emit addressesUpdated(addresses_.values() + passthrough_);
 }
 
 void SplitTunnelingAddressesGroup::addAddressInternal(types::SplitTunnelingNetworkRoute &address)
@@ -63,7 +72,7 @@ void SplitTunnelingAddressesGroup::addAddressInternal(types::SplitTunnelingNetwo
     connect(item, &AddressItem::deleteClicked, this, &SplitTunnelingAddressesGroup::onDeleteClicked);
     connect(item, &AddressItem::activeChanged, this, [this, item](bool active) {
         addresses_[item].active = active;
-        emit addressesUpdated(addresses_.values());
+        emit addressesUpdated(addresses_.values() + passthrough_);
     });
     addresses_[item] = address;
     addItem(item);
@@ -115,7 +124,7 @@ void SplitTunnelingAddressesGroup::onDeleteClicked()
     }
     addresses_.remove(item);
     hideItems(indexOf(item), -1, DISPLAY_FLAGS::FLAG_DELETE_AFTER);
-    emit addressesUpdated(addresses_.values());
+    emit addressesUpdated(addresses_.values() + passthrough_);
 }
 
 SplitTunnelingAddressesGroup::ValidationCode SplitTunnelingAddressesGroup::validate(QString &address)

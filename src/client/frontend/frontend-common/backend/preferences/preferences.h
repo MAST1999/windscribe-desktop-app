@@ -148,6 +148,8 @@ public:
     void setSplitTunnelingApps(QList<types::SplitTunnelingApp> apps);
     QList<types::SplitTunnelingNetworkRoute> splitTunnelingNetworkRoutes();
     void setSplitTunnelingNetworkRoutes(QList<types::SplitTunnelingNetworkRoute> routes);
+    QString splitTunnelingGeoIpDatabase();
+    void setSplitTunnelingGeoIpDatabase(const QString &path);
     types::SplitTunnelingSettings splitTunnelingSettings();
     void setSplitTunnelingSettings(types::SplitTunnelingSettings settings);
 

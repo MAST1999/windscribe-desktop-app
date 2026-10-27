@@ -5,6 +5,7 @@
 #include "commongraphics/basepage.h"
 #include "preferenceswindow/preferencegroup.h"
 #include "splittunnelingaddressesgroup.h"
+#include "splittunnelingcountriesgroup.h"
 
 namespace PreferencesWindow {
 
@@ -25,6 +26,8 @@ signals:
 
 private slots:
     void onAddressesUpdated(QList<types::SplitTunnelingNetworkRoute> addresses);
+    void onCountriesUpdated(QList<types::SplitTunnelingNetworkRoute> routes);
+    void onGeoIpDatabasePathChanged(const QString &path);
     void onError(QString msg);
     void onClearError();
     void onLanguageChanged();
@@ -34,6 +37,7 @@ private:
     Preferences *preferences_;
     PreferenceGroup *desc_;
     SplitTunnelingAddressesGroup *addressesGroup_;
+    SplitTunnelingCountriesGroup *countriesGroup_;
 
     bool loggedIn_;
 };
