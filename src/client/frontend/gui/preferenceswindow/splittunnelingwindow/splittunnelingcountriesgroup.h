@@ -2,8 +2,8 @@
 
 #include <QHash>
 #include "preferenceswindow/preferencegroup.h"
-#include "comboboxitem.h"
-#include "editboxitem.h"
+#include "preferenceswindow/comboboxitem.h"
+#include "preferenceswindow/editboxitem.h"
 #include "splittunnelingwindow/addressitem.h"
 
 namespace PreferencesWindow {
