@@ -877,6 +877,7 @@ void Preferences::setGuiSettings(const types::GuiSettings &gs)
     }
     setSplitTunnelingNetworkRoutes(networkRoutes);
 
+    setSplitTunnelingGeoIpDatabase(gs.splitTunneling.geoipDatabasePath);
     setSplitTunnelingSettings(gs.splitTunneling.settings);
 }
 
@@ -1007,6 +1008,7 @@ void Preferences::loadIni()
     setShareProxyGateway(gs.shareProxyGateway);
     setSplitTunnelingApps(gs.splitTunneling.apps);
     setSplitTunnelingNetworkRoutes(gs.splitTunneling.networkRoutes);
+    setSplitTunnelingGeoIpDatabase(gs.splitTunneling.geoipDatabasePath);
     setSplitTunnelingSettings(gs.splitTunneling.settings);
 
     isSettingEngineSettings_ = true;

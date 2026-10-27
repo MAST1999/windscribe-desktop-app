@@ -239,7 +239,7 @@ private:
     // Increment when a direct field is added/removed OR when any nested type's versionForSerialization_ increases.
     // Inline-nested QDataStream serialization has no length framing, so a nested-type version mismatch poisons the
     // whole stream in an older reader; bumping here lets the older reader short-circuit at this outer check instead.
-    static constexpr quint32 versionForSerialization_ = 8;
+    static constexpr quint32 versionForSerialization_ = 9;
 };
 
 inline GuiSettings::GuiSettings(const QJsonObject &json)
