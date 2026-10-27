@@ -94,4 +94,12 @@ if(IS_BUILD_TESTS)
     )
     set_target_properties(countryranges.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     ws_add_test(countryranges)
+
+    # DNS wire-format helpers for the domain-regex resolver.  dns_parse.cpp needs only std.
+    add_executable(dnsparsing.test
+        dnsparsing.test.cpp
+        ../split_tunneling/dns_parse.cpp
+    )
+    set_target_properties(dnsparsing.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    ws_add_test(dnsparsing)
 endif(IS_BUILD_TESTS)

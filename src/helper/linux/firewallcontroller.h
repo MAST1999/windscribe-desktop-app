@@ -70,6 +70,14 @@ public:
     // No-op (and flushed) in include mode.
     void setSplitTunnelCountryRules(const std::vector<std::string> &countryCodes);
 
+    // Domain-regex state (Linux): `active` gates the DNS redirect + dynamic destination set. The
+    // upstream IPs are excluded from the redirect so the resolver's own forwarded queries loop
+    // free; either being empty disables the feature.
+    void setSplitTunnelDomainRegexState(bool active, const std::string &upstreamV4, const std::string &upstreamV6);
+    // Ranges reported by DomainRegexResolver for matched domains; accumulated into the
+    // ws_dyn_domains sets and applied as one nft transaction.
+    void addDynamicDomainIps(const std::vector<types::IpAddressRange> &ips);
+
     // Rebuilds and applies the split-tunnel chains from the current state as one nft transaction.
     // Call after setSplitTunnelIpExceptions() outside the connect path. Returns false (and logs) if
     // the nft apply is rejected, so the failure isn't swallowed.
@@ -92,6 +100,12 @@ private:
     std::vector<types::IpAddressRange> splitTunnelIps_;
     // Lowercase ISO country codes for destination-country pass-through (empty = feature off).
     std::vector<std::string> splitTunnelCountries_;
+    // Domain-regex enforcement state (see setSplitTunnelDomainRegexState) and the destination IPs
+    // the resolver has observed for matched domains.
+    bool domainRegexActive_ = false;
+    std::string domainRegexUpstreamV4_;
+    std::string domainRegexUpstreamV6_;
+    std::vector<types::IpAddressRange> domainRegexDynIps_;
     std::string defaultAdapter_;
     std::string defaultAdapterIp_;
     std::string defaultAdapterIpV6_;

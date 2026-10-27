@@ -7,6 +7,7 @@
 #include "../firewallcontroller.h"
 #include "../utils.h"
 #include "country_ranges_loader.h"
+#include "domain_regex_resolver.h"
 #include "types/ipaddress.h"
 
 SplitTunneling::SplitTunneling(): isSplitTunnelActive_(false), isExclude_(false), isAllowLanTraffic_(false)
@@ -43,6 +44,9 @@ void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bo
         geoipPath_ = geoipDatabasePath;
     }
 
+    // Domain-regex patterns feed the DNS-layer classifier (enforcement state is armed from
+    // updateState() on connect, where the tunnel DNS upstreams become known).
+    DomainRegexResolver::instance().setPatterns(regexDomainRules);
     // Push the (possibly emptied) selection to the firewall right away: the sets get rebuilt from
     // whatever ranges the loader currently holds — empty when the file is not parsed (yet), so a
     // half-ready state degrades to "no country rules", never to broken rules. The GeoIP parse
@@ -62,6 +66,39 @@ void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bo
     // the regex process rules for the monitor.
     ProcessMonitor::instance().setRegexApps(regexProcessRules);
     setSplitTunnelingParams(isActive, isExclude, apps, ips, hosts, isAllowLanTraffic);
+}
+
+// Arms or disarms the domain-regex DNS classifier from full state: it runs only while connected,
+// ST is active in exclude mode, patterns exist, and a tunnel DNS upstream is known. Everything
+// else (patterns/redirect/sets) keys off the FirewallController's armed state, so a stale armed
+// flag after a disconnect is harmless — but we disarm explicitly anyway to stop the listener.
+void SplitTunneling::updateDomainRegexState()
+{
+    DomainRegexResolver &resolver = DomainRegexResolver::instance();
+
+    std::vector<std::string> servers;
+    bool wantActive = false;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        wantActive = connectStatus_.isConnected && isSplitTunnelActive_ && isExclude_ && !regexDomainRules_.empty();
+        for (const auto &dns : connectStatus_.vpnAdapter.dnsServers) {
+            if (dns.isValid()) {
+                servers.push_back(dns.toString());
+            }
+        }
+    }
+    resolver.setUpstreams(servers);
+
+    if (wantActive) {
+        resolver.setMatchedIpsHandler([](const std::vector<types::IpAddressRange> &ranges) {
+            FirewallController::instance().addDynamicDomainIps(ranges);
+        });
+        FirewallController::instance().setSplitTunnelDomainRegexState(true, resolver.upstreamV4(), std::string());
+        resolver.enable();
+    } else {
+        resolver.disable();
+        FirewallController::instance().setSplitTunnelDomainRegexState(false, std::string(), std::string());
+    }
 }
 
 void SplitTunneling::geoipParseWorker()
@@ -124,6 +161,8 @@ void SplitTunneling::setSplitTunnelingParams(bool isActive, bool isExclude, cons
 
 bool SplitTunneling::updateState()
 {
+    updateDomainRegexState();
+
     if (connectStatus_.isConnected && isSplitTunnelActive_) {
         if (!apps_.empty() || !regexProcessRules_.empty()) {
             bool ret = CGroups::instance().enable(connectStatus_, isAllowLanTraffic_, isExclude_);

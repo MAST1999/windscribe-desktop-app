@@ -65,6 +65,8 @@ private:
     // Worker body: parses the current GeoIP path (looping if it changes mid-run) and re-applies the
     // firewall so freshly parsed ranges (or an emptied selection) reach the kernel.
     void geoipParseWorker();
+    // Arms/disarms the domain-regex DNS classifier from current connect + settings state.
+    void updateDomainRegexState();
 
     SplitTunneling();
     ~SplitTunneling();

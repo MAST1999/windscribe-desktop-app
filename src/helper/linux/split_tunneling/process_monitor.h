@@ -9,7 +9,7 @@
 #include <vector>
 #include <sys/types.h>
 
-class RE2;
+#include <re2/re2.h>
 
 class ProcessMonitor
 {

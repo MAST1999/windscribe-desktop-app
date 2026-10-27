@@ -15,6 +15,7 @@
 #include "nftables/nftablescontroller.h"
 #include "split_tunneling/cgroups.h"
 #include "split_tunneling/country_ranges_loader.h"
+#include "split_tunneling/domain_regex_resolver.h"
 #include "utils.h"
 
 namespace
@@ -278,6 +279,7 @@ bool FirewallController::disable()
     buf += nft::deleteChain("st_route_out");
     buf += nft::deleteChain("st_nat_post");
     buf += nft::deleteChain("st_pre_cm");
+    buf += nft::deleteChain("st_dns_out");
     // The dnsleaks chain is owned by the DNS-leak path and normally torn down on disconnect. When the
     // firewall is turned off while not connected, that chain has no reason to persist; remove it here as
     // a safety net so its port-53 drops can't be left blocking the OS resolvers if a disconnect teardown
@@ -345,6 +347,8 @@ std::string FirewallController::buildSplitTunnelRules()
     // references to sets that might not exist, and makes clearing the selection self-cleaning.
     buf += nft::ensureSet("ws_countries", "type ipv4_addr; flags interval;");
     buf += nft::ensureSet("ws_countries6", "type ipv6_addr; flags interval;");
+    buf += nft::ensureSet("ws_dyn_domains", "type ipv4_addr; flags interval;");
+    buf += nft::ensureSet("ws_dyn_domains6", "type ipv6_addr; flags interval;");
 
     if (connected_ && splitTunnelEnabled_) {
         // The routing/NAT/connmark base chains are only needed while split tunneling is active, so
@@ -358,6 +362,12 @@ std::string FirewallController::buildSplitTunnelRules()
         buf += nft::ensureChain("st_route_out", "type route hook output priority -150;");
         buf += nft::ensureChain("st_nat_post", "type nat hook postrouting priority 100;");
         buf += nft::ensureChain("st_pre_cm", "type filter hook prerouting priority -140;");
+        if (domainRegexActive_) {
+            // DNS redirect for domain-regex classification. NAT output hook so locally generated
+            // queries are bounced to the resolver; the upstream is excluded so the resolver's own
+            // forwarded queries pass straight through.
+            buf += nft::ensureChain("st_dns_out", "type nat hook output priority -100;");
+        }
 
         const bool defAdapterValid = !defaultAdapter_.empty() && Validation::isValidInterfaceName(defaultAdapter_);
         auto add = [&](const std::string &ch, const std::string &e) {
@@ -378,6 +388,21 @@ std::string FirewallController::buildSplitTunnelRules()
             // "ping: failed".
             add("st_route_out", "meta cgroup " + classid + " meta mark set " + mark + " ct mark set " + mark);
             add("st_pre_cm", "meta mark set ct mark");
+
+            // Domain-regex mode: locally generated DNS must NOT be marked, or the redirected
+            // loopback query would be policy-routed out the physical interface (table 69) and die.
+            // The resolver's own forwarded queries carry the upstream daddr and are unaffected.
+            if (domainRegexActive_) {
+                add("st_route_out", "udp dport 53 return");
+                if (!domainRegexUpstreamV4_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV4_)) {
+                    add("st_dns_out", "udp dport 53 ip daddr != " + domainRegexUpstreamV4_ + " redirect to :" +
+                                          std::to_string(DomainRegexResolver::kListenPort));
+                }
+                if (!domainRegexUpstreamV6_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV6_)) {
+                    add("st_dns_out", "udp dport 53 ip6 daddr != " + domainRegexUpstreamV6_ + " redirect to :" +
+                                          std::to_string(DomainRegexResolver::kListenPort));
+                }
+            }
             // Per-IP exceptions + the cgroup accept, in the firewall jump targets so excluded
             // traffic is permitted past the drop policy.
             for (const auto &ip : splitTunnelIps_) {
@@ -397,43 +422,70 @@ std::string FirewallController::buildSplitTunnelRules()
             add("st_in",  "meta mark " + mark + " accept");
             add("st_out", "meta cgroup " + classid + " accept");
 
+            // Shared emission for destination-based bypass sets (countries and domain-regex
+            // matches): populate the interval sets, then mark the traffic into the physical
+            // egress table (the same mark the cgroup path uses), masquerade it, and parallel the
+            // per-IP kill-switch accepts above. Empty element lists emit nothing.
+            auto addIpSetBlock = [&](const char *setName4, const char *setName6,
+                                     const std::vector<std::string> &elems4,
+                                     const std::vector<std::string> &elems6) {
+                if (!elems4.empty()) {
+                    buf += nft::setElements(setName4, elems4);
+                    if (defAdapterValid) {
+                        add("st_nat_post", std::string("ip daddr @") + setName4 + " oifname \"" + defaultAdapter_ + "\" masquerade");
+                    }
+                    add("st_route_out", std::string("ip daddr @") + setName4 + " meta mark set " + mark + " ct mark set " + mark);
+                    add("st_in",  std::string("ip saddr @") + setName4 + " accept");
+                    add("st_out", std::string("ip daddr @") + setName4 + " accept");
+                }
+                if (!elems6.empty()) {
+                    buf += nft::setElements(setName6, elems6);
+                    if (defAdapterValid) {
+                        add("st_nat_post", std::string("ip6 daddr @") + setName6 + " oifname \"" + defaultAdapter_ + "\" masquerade");
+                    }
+                    add("st_route_out", std::string("ip6 daddr @") + setName6 + " meta mark set " + mark + " ct mark set " + mark);
+                    add("st_in",  std::string("ip6 saddr @") + setName6 + " accept");
+                    add("st_out", std::string("ip6 daddr @") + setName6 + " accept");
+                }
+            };
+
             // Country pass-through: destinations in the selected countries ride the same mark ->
-            // table 69 (physical egress) policy routing as cgroup traffic, with the same connmark
-            // reply-path handling via st_pre_cm. The mark rule must come BEFORE the cgroup rule is
-            // irrelevant (both set the same mark), but the set-based kill-switch accepts parallel
-            // the per-IP accepts above. An empty selection or empty GeoIP index yields empty sets:
-            // the rules are then no-ops with zero per-packet cost beyond one set lookup per packet.
+            // table 69 (physical egress) policy routing as cgroup traffic. An empty selection or
+            // empty GeoIP index yields empty sets: the rules are then no-ops with zero per-packet
+            // cost beyond one set lookup per packet.
             if (!splitTunnelCountries_.empty()) {
                 const auto ranges4 = CountryRangesLoader::instance().unionRanges4(splitTunnelCountries_);
                 const auto ranges6 = CountryRangesLoader::instance().unionRanges6(splitTunnelCountries_);
-                if (!ranges4.empty()) {
-                    std::vector<std::string> elems;
-                    elems.reserve(ranges4.size());
-                    for (const auto &r : ranges4) {
-                        elems.push_back(ip4ToString(r.from) + "-" + ip4ToString(r.to));
-                    }
-                    buf += nft::setElements("ws_countries", elems);
-                    if (defAdapterValid) {
-                        add("st_nat_post", "ip daddr @ws_countries oifname \"" + defaultAdapter_ + "\" masquerade");
-                    }
-                    add("st_route_out", "ip daddr @ws_countries meta mark set " + mark + " ct mark set " + mark);
-                    add("st_in",  "ip saddr @ws_countries accept");
-                    add("st_out", "ip daddr @ws_countries accept");
+                std::vector<std::string> elems4;
+                elems4.reserve(ranges4.size());
+                for (const auto &r : ranges4) {
+                    elems4.push_back(ip4ToString(r.from) + "-" + ip4ToString(r.to));
                 }
-                if (!ranges6.empty()) {
-                    std::vector<std::string> elems;
-                    elems.reserve(ranges6.size());
-                    for (const auto &r : ranges6) {
-                        elems.push_back(ip6ToString(r.from) + "-" + ip6ToString(r.to));
-                    }
-                    buf += nft::setElements("ws_countries6", elems);
-                    if (defAdapterValid) {
-                        add("st_nat_post", "ip6 daddr @ws_countries6 oifname \"" + defaultAdapter_ + "\" masquerade");
-                    }
-                    add("st_route_out", "ip6 daddr @ws_countries6 meta mark set " + mark + " ct mark set " + mark);
-                    add("st_in",  "ip6 saddr @ws_countries6 accept");
-                    add("st_out", "ip6 daddr @ws_countries6 accept");
+                std::vector<std::string> elems6;
+                elems6.reserve(ranges6.size());
+                for (const auto &r : ranges6) {
+                    elems6.push_back(ip6ToString(r.from) + "-" + ip6ToString(r.to));
                 }
+                addIpSetBlock("ws_countries", "ws_countries6", elems4, elems6);
+            }
+
+            // Domain-regex matches: destinations the resolver observed for matching domains. The
+            // accumulated ranges live in domainRegexDynIps_ (refreshed wholesale on every apply).
+            if (domainRegexActive_) {
+                std::vector<std::string> elems4;
+                std::vector<std::string> elems6;
+                for (const auto &range : domainRegexDynIps_) {
+                    if (!range.isValid()) {
+                        continue;
+                    }
+                    const std::string s = range.address().toString() + "/" + std::to_string(range.prefixLength());
+                    if (range.isV6()) {
+                        elems6.push_back(s);
+                    } else {
+                        elems4.push_back(s);
+                    }
+                }
+                addIpSetBlock("ws_dyn_domains", "ws_dyn_domains6", elems4, elems6);
             }
         } else {
             // Inclusive: everything NOT in the cgroup bypasses the tunnel. connmark carries the mark
@@ -487,6 +539,13 @@ void FirewallController::setSplitTunnelingEnabled(bool isConnected, bool isEnabl
     defaultAdapter_ = adapter;
     defaultAdapterIp_ = adapterIp;
     defaultAdapterIpV6_ = adapterIpV6;
+    if (!isConnected || !isEnabled) {
+        // ST going away resets the domain-regex destinations (the redirect goes with the chains).
+        domainRegexActive_ = false;
+        domainRegexDynIps_.clear();
+        domainRegexUpstreamV4_.clear();
+        domainRegexUpstreamV6_.clear();
+    }
 
     applySplitTunnel();
 }
@@ -515,6 +574,30 @@ void FirewallController::setSplitTunnelCountryRules(const std::vector<std::strin
     // DNS-resolver thread's applySplitTunnel.
     std::lock_guard<std::recursive_mutex> lock(stateMutex_);
     splitTunnelCountries_ = countryCodes;
+    applySplitTunnel();
+}
+
+void FirewallController::setSplitTunnelDomainRegexState(bool active, const std::string &upstreamV4,
+                                                        const std::string &upstreamV6)
+{
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    // Deactivation clears the accumulated destinations so a later re-enable starts clean.
+    if (!active) {
+        domainRegexDynIps_.clear();
+    }
+    domainRegexActive_ = active;
+    domainRegexUpstreamV4_ = upstreamV4;
+    domainRegexUpstreamV6_ = upstreamV6;
+    applySplitTunnel();
+}
+
+void FirewallController::addDynamicDomainIps(const std::vector<types::IpAddressRange> &ips)
+{
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    if (!domainRegexActive_) {
+        return;
+    }
+    domainRegexDynIps_.insert(domainRegexDynIps_.end(), ips.begin(), ips.end());
     applySplitTunnel();
 }
 
