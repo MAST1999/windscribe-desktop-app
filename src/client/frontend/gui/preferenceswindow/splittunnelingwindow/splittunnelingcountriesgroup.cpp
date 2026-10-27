@@ -81,6 +81,15 @@ void SplitTunnelingCountriesGroup::setLoggedIn(bool loggedIn)
     }
 }
 
+void SplitTunnelingCountriesGroup::setIncludeMode(bool includeMode)
+{
+    if (includeMode_ == includeMode) {
+        return;
+    }
+    includeMode_ = includeMode;
+    updateDbStatus();
+}
+
 void SplitTunnelingCountriesGroup::onPathEdited(const QString &text)
 {
     dbPath_ = text.trimmed();
@@ -148,6 +157,13 @@ QList<types::SplitTunnelingNetworkRoute> SplitTunnelingCountriesGroup::currentFu
 
 void SplitTunnelingCountriesGroup::updateDbStatus()
 {
+    if (includeMode_) {
+        // Country pass-through is exclude-mode-only: in include mode everything outside the
+        // tunnel already egresses directly, so the selection would be a no-op (spec §5.5).
+        picker_->setClickable(false);
+        dbPathItem_->setPrompt(tr("Country rules apply in Exclude mode only"));
+        return;
+    }
     if (dbPath_.isEmpty()) {
         picker_->setClickable(false);
         dbPathItem_->setPrompt(tr("No database selected — download DB-IP LITE (db-ip.com/db/lite.php) or GeoLite2 CSV, then enter its path here"));

@@ -22,6 +22,8 @@ public:
     void setRoutes(const QList<types::SplitTunnelingNetworkRoute> &routes);
     void setGeoIpDatabasePath(const QString &path);
     void setLoggedIn(bool loggedIn);
+    // Country pass-through is an exclude-mode feature; greyed out with an explanation otherwise.
+    void setIncludeMode(bool includeMode);
 
 signals:
     void routesUpdated(const QList<types::SplitTunnelingNetworkRoute> &routes);
@@ -39,7 +41,6 @@ private:
     void addCountryInternal(const types::SplitTunnelingNetworkRoute &route);
     void updateDbStatus();
     QList<types::SplitTunnelingNetworkRoute> currentFullList() const;
-    QString countryCodeToDisplayName(const QString &code) const;
 
     EditBoxItem *dbPathItem_;
     ComboBoxItem *picker_;
@@ -48,6 +49,7 @@ private:
     QList<types::SplitTunnelingNetworkRoute> lastRoutes_;    // re-entrancy guard for preference round-trips
     QString dbPath_;
     bool loggedIn_ = false;
+    bool includeMode_ = false;
 };
 
 } // namespace PreferencesWindow

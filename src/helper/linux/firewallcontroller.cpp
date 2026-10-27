@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <arpa/inet.h>
+#include <chrono>
 #include <cstring>
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <pwd.h>
 #include <sstream>
+#include <thread>
 #include <unistd.h>
 #include <spdlog/spdlog.h>
 
@@ -342,13 +344,20 @@ std::string FirewallController::buildSplitTunnelRules()
     buf += nft::ensureChain("st_in");
     buf += nft::ensureChain("st_out");
 
-    // Country pass-through sets always exist and are always emptied here; elements are only
-    // repopulated for the active exclude-mode case below. This keeps the rule text free of
-    // references to sets that might not exist, and makes clearing the selection self-cleaning.
-    buf += nft::ensureSet("ws_countries", "type ipv4_addr; flags interval;");
-    buf += nft::ensureSet("ws_countries6", "type ipv6_addr; flags interval;");
-    buf += nft::ensureSet("ws_dyn_domains", "type ipv4_addr; flags interval;");
-    buf += nft::ensureSet("ws_dyn_domains6", "type ipv6_addr; flags interval;");
+    const bool stActive = connected_ && splitTunnelEnabled_;
+    // Destination-bypass sets (countries, domain-regex matches) exist only while ST is active —
+    // hard requirement: everything is created/destroyed with the ST lifecycle. When inactive they
+    // are torn down (add-then-delete keeps it idempotent); rule text never references them outside
+    // the active branch.
+    const char *kSetSpecs[][2] = {
+        { "ws_countries", "type ipv4_addr; flags interval;" },
+        { "ws_countries6", "type ipv6_addr; flags interval;" },
+        { "ws_dyn_domains", "type ipv4_addr; flags interval;" },
+        { "ws_dyn_domains6", "type ipv6_addr; flags interval;" },
+    };
+    for (const auto &set : kSetSpecs) {
+        buf += stActive ? nft::ensureSet(set[0], set[1]) : nft::deleteSet(set[0], set[1]);
+    }
 
     if (connected_ && splitTunnelEnabled_) {
         // The routing/NAT/connmark base chains are only needed while split tunneling is active, so
@@ -597,8 +606,34 @@ void FirewallController::addDynamicDomainIps(const std::vector<types::IpAddressR
     if (!domainRegexActive_) {
         return;
     }
-    domainRegexDynIps_.insert(domainRegexDynIps_.end(), ips.begin(), ips.end());
-    applySplitTunnel();
+    // Bound the accumulation: the set exists to bypass destinations a user's matched domains
+    // actually resolve to, not to mirror the whole internet.
+    static constexpr size_t kMaxDynamicDomainIps = 4096;
+    size_t dropped = 0;
+    for (const auto &range : ips) {
+        if (domainRegexDynIps_.size() >= kMaxDynamicDomainIps) {
+            dropped++;
+            continue;
+        }
+        domainRegexDynIps_.push_back(range);
+    }
+    if (dropped > 0) {
+        spdlog::warn("FirewallController: dynamic domain IP cap reached, dropped {} address(es)", dropped);
+    }
+
+    // Debounce: DNS answers arrive in bursts (a page load resolves dozens of names); one apply
+    // after the quiet period covers them all. The detached thread always applies everything
+    // accumulated by the time it fires, so no range can be stranded unapplied.
+    if (dynApplyPending_) {
+        return;
+    }
+    dynApplyPending_ = true;
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        std::lock_guard<std::recursive_mutex> lock(FirewallController::instance().stateMutex_);
+        FirewallController::instance().dynApplyPending_ = false;
+        FirewallController::instance().applySplitTunnel();
+    }).detach();
 }
 
 void FirewallController::probeInterfaceAddresses(const std::string &iface, std::vector<std::string> &v4Addrs, bool &hasNonLinkLocalV6)

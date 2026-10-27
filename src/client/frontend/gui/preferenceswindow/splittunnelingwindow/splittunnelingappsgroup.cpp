@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QPainter>
+#include <re2/re2.h>
 #include "preferenceswindow/preferencegroup.h"
 
 #if defined(Q_OS_WIN)
@@ -132,6 +133,18 @@ void SplitTunnelingAppsGroup::onRegexEdited(QString text)
     for (const types::SplitTunnelingApp &app : apps_) {
         if (app.isRegex && app.fullName == pattern) {
             emit setError(tr("That regular expression already exists. Please enter a new one."));
+            return;
+        }
+    }
+
+    // Authoritative compile check so the user sees failures immediately instead of adding a
+    // silently-dead rule (the helper re-compiles and would only log).
+    {
+        RE2::Options options;
+        options.set_log_errors(false);
+        const RE2 compiled(pattern.toStdString(), options);
+        if (!compiled.ok()) {
+            emit setError(tr("Invalid regular expression: %1").arg(QString::fromStdString(compiled.error())));
             return;
         }
     }

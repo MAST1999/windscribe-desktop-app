@@ -106,6 +106,9 @@ private:
     std::string domainRegexUpstreamV4_;
     std::string domainRegexUpstreamV6_;
     std::vector<types::IpAddressRange> domainRegexDynIps_;
+    // True while the detached debounce thread (addDynamicDomainIps) is waiting to apply, so a
+    // burst of DNS answers costs one nft transaction instead of one per response.
+    bool dynApplyPending_ = false;
     std::string defaultAdapter_;
     std::string defaultAdapterIp_;
     std::string defaultAdapterIpV6_;

@@ -102,4 +102,11 @@ if(IS_BUILD_TESTS)
     )
     set_target_properties(dnsparsing.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     ws_add_test(dnsparsing)
+
+    # Golden tests for the nft command-buffer builders.  Header-only; needs no linking.
+    add_executable(nftbuilders.test
+        nftbuilders.test.cpp
+    )
+    set_target_properties(nftbuilders.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    ws_add_test(nftbuilders)
 endif(IS_BUILD_TESTS)

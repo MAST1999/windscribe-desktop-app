@@ -52,6 +52,15 @@ inline std::string ensureSet(const std::string &name, const std::string &spec)
            "flush set " + kNftTable + " " + name + "\n";
 }
 
+// Idempotent set teardown: the add (create-if-absent, same spec) guarantees the delete can't fail
+// on a missing set, mirroring deleteChain. Callers must not reference the set from any rule that
+// outlives this transaction.
+inline std::string deleteSet(const std::string &name, const std::string &spec)
+{
+    return "add set " + kNftTable + " " + name + " { " + spec + " }\n"
+           "delete set " + kNftTable + " " + name + "\n";
+}
+
 // One or more `add element <table> <set> { e0, e1, ... }` lines, batched so a large element set
 // stays within sane buffer/statement sizes.
 inline std::string setElements(const std::string &name, const std::vector<std::string> &elements)

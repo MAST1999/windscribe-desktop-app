@@ -68,32 +68,39 @@ void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bo
     setSplitTunnelingParams(isActive, isExclude, apps, ips, hosts, isAllowLanTraffic);
 }
 
-// Arms or disarms the domain-regex DNS classifier from full state: it runs only while connected,
-// ST is active in exclude mode, patterns exist, and a tunnel DNS upstream is known. Everything
-// else (patterns/redirect/sets) keys off the FirewallController's armed state, so a stale armed
-// flag after a disconnect is harmless — but we disarm explicitly anyway to stop the listener.
+// Arms or disarms the domain-regex DNS classifier from current connect + settings state.
+// Caller MUST hold mutex_ (both updateState() call sites do): this reads regexDomainRules_ and
+// connectStatus_ directly. The resolver/firewall take their own locks, so calling outward here is
+// safe under mutex_.
 void SplitTunneling::updateDomainRegexState()
 {
     DomainRegexResolver &resolver = DomainRegexResolver::instance();
 
-    std::vector<std::string> servers;
-    bool wantActive = false;
-    {
-        std::lock_guard<std::mutex> guard(mutex_);
-        wantActive = connectStatus_.isConnected && isSplitTunnelActive_ && isExclude_ && !regexDomainRules_.empty();
-        for (const auto &dns : connectStatus_.vpnAdapter.dnsServers) {
-            if (dns.isValid()) {
-                servers.push_back(dns.toString());
-            }
+    std::string upstreamV4;
+    std::string upstreamV6;
+    bool wantActive = connectStatus_.isConnected && isSplitTunnelActive_ && isExclude_
+                      && !regexDomainRules_.empty();
+    for (const auto &dns : connectStatus_.vpnAdapter.dnsServers) {
+        if (!dns.isValid()) {
+            continue;
+        }
+        if (upstreamV4.empty() && !dns.isV6()) {
+            upstreamV4 = dns.toString();
+        }
+        if (upstreamV6.empty() && dns.isV6()) {
+            upstreamV6 = dns.toString();
         }
     }
-    resolver.setUpstreams(servers);
+    if (upstreamV4.empty() && upstreamV6.empty()) {
+        wantActive = false;   // nowhere to forward: keep the feature inert rather than blackhole DNS
+    }
+    resolver.setUpstreams(upstreamV4.empty() ? std::vector<std::string>{} : std::vector<std::string>{upstreamV4});
 
     if (wantActive) {
         resolver.setMatchedIpsHandler([](const std::vector<types::IpAddressRange> &ranges) {
             FirewallController::instance().addDynamicDomainIps(ranges);
         });
-        FirewallController::instance().setSplitTunnelDomainRegexState(true, resolver.upstreamV4(), std::string());
+        FirewallController::instance().setSplitTunnelDomainRegexState(true, upstreamV4, upstreamV6);
         resolver.enable();
     } else {
         resolver.disable();
@@ -109,22 +116,32 @@ void SplitTunneling::geoipParseWorker()
             std::lock_guard<std::mutex> guard(mutex_);
             path = geoipPath_;
         }
-        if (path.empty() || CountryRangesLoader::instance().isUpToDate(path)) {
-            break;
+        if (!path.empty() && !CountryRangesLoader::instance().isUpToDate(path)) {
+            std::string err;
+            if (!CountryRangesLoader::instance().ensureLoaded(path, &err)) {
+                // The loader keeps its previous index on failure; re-apply anyway so the firewall
+                // reflects a consistent (possibly stale/empty) country selection. A changed or
+                // fixed file arrives via the next V2 command or (size, mtime) change.
+                spdlog::warn("SplitTunneling: GeoIP database unusable ({}), country rules off until the file changes", err);
+                FirewallController::instance().applySplitTunnel();
+            } else {
+                spdlog::info("SplitTunneling: GeoIP database loaded, re-applying country rules");
+                FirewallController::instance().applySplitTunnel();
+            }
         }
-        std::string err;
-        if (!CountryRangesLoader::instance().ensureLoaded(path, &err)) {
-            // The loader keeps its previous index on failure; re-apply anyway so the firewall
-            // reflects a consistent (possibly stale/empty) country selection, and stop retrying —
-            // a changed or fixed file arrives via the next V2 command or (size, mtime) change.
-            spdlog::warn("SplitTunneling: GeoIP database unusable ({}), country rules off until the file changes", err);
-            FirewallController::instance().applySplitTunnel();
-            break;
+
+        // Release the busy flag, then RE-CHECK under the lock: a V2 command that arrived while we
+        // were marked busy failed its compare-exchange (the spawn slot was taken) and relies on us
+        // noticing its path here. Redundant workers are harmless — ensureLoaded() is idempotent
+        // and mutex-protected — so a spawn that slips into the release window is fine.
+        geoipParseBusy_ = false;
+        std::lock_guard<std::mutex> guard(mutex_);
+        const std::string fresh = geoipPath_;
+        if (fresh.empty() || CountryRangesLoader::instance().isUpToDate(fresh)) {
+            return;
         }
-        spdlog::info("SplitTunneling: GeoIP database loaded, re-applying country rules");
-        FirewallController::instance().applySplitTunnel();
+        geoipParseBusy_ = true;   // keep the slot and loop for the newly changed file
     }
-    geoipParseBusy_ = false;
 }
 
 void SplitTunneling::setSplitTunnelingParams(bool isActive, bool isExclude, const std::vector<std::string> &apps,

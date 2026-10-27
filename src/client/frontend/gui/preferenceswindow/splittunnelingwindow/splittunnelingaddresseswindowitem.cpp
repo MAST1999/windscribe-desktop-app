@@ -100,6 +100,7 @@ void SplitTunnelingAddressesWindowItem::onPreferencesChanged()
     addressesGroup_->setAddresses(preferences_->splitTunnelingNetworkRoutes());
     countriesGroup_->setRoutes(preferences_->splitTunnelingNetworkRoutes());
     countriesGroup_->setGeoIpDatabasePath(preferences_->splitTunnelingGeoIpDatabase());
+    countriesGroup_->setIncludeMode(preferences_->splitTunnelingSettings().mode == SPLIT_TUNNELING_MODE_INCLUDE);
 }
 
 } // namespace

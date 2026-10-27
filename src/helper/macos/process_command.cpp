@@ -68,8 +68,9 @@ std::string setSplitTunnelingSettings(const std::string &pars)
 }
 
 // v2 split-tunneling intake. macOS enforcement lives in the network extension and only consumes
-// isActive/isExclude (see docs/plans/split-tunneling-regex-and-country.md, §5.6); parse the extended
-// payload and forward the supported subset, logging what was not enforced.
+// isActive/isExclude (see docs/plans/split-tunneling-regex-and-country.md, §5.6); parse the
+// extended payload and forward the V1 subset through the V1 handler so nothing the client sent is
+// silently dropped, logging what was not enforced.
 std::string setSplitTunnelingSettingsV2(const std::string &pars)
 {
     bool isActive, isExclude, isAllowLanTraffic;
@@ -81,8 +82,7 @@ std::string setSplitTunnelingSettingsV2(const std::string &pars)
     spdlog::info("setSplitTunnelingSettingsV2: received {} process regexes, {} domain regexes, {} country codes; "
                  "the extension enforces only the V1 subset in this version",
                  regexProcessRules.size(), regexDomainRules.size(), countryCodes.size());
-    RoutesManager::instance().setSplitTunnelSettings(isActive, isExclude);
-    return std::string();
+    return setSplitTunnelingSettings(serializeResult(isActive, isExclude, isAllowLanTraffic, files, ips, hosts));
 }
 
 std::string sendConnectStatus(const std::string &pars)

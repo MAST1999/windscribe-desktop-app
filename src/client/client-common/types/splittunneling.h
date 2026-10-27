@@ -363,6 +363,8 @@ struct SplitTunneling
     static constexpr int kMaxStringLen = 4096;
     // New-rule-kind caps. Countries are destination sets expanded kernel-side (each adds thousands
     // of nft set elements), so the cap is tight; regex patterns are cheap but bounded anyway.
+    // kMaxRegexRules bounds process + domain regexes COMBINED (compile cost and classifier load).
+    static constexpr int kMaxRegexRules = 100;
     static constexpr int kMaxCountryRules = 10;
     static constexpr int kMaxDomainRegexRules = 100;
 
@@ -582,6 +584,7 @@ struct SplitTunneling
         filteredApps.reserve(apps.size() < kMaxApps ? apps.size() : kMaxApps);
         int droppedAppsOverCap = 0;
         int droppedInvalidApps = 0;
+        int numRegexApps = 0;
         for (SplitTunnelingApp &app : apps) {
             if (app.fullName.isEmpty()) {
                 // App not found on this system (file existence check in constructor)
@@ -606,6 +609,9 @@ struct SplitTunneling
             if (filteredApps.size() >= kMaxApps) {
                 droppedAppsOverCap++;
                 continue;
+            }
+            if (app.isRegex) {
+                numRegexApps++;
             }
             filteredApps.append(app);
         }
@@ -642,7 +648,10 @@ struct SplitTunneling
                 }
                 numCountries++;
             } else if (r.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
-                if (numDomainRegexes >= kMaxDomainRegexRules) {
+                // Combined cap with process regexes: the two kinds share the classifier budget
+                // (spec §5.1 kMaxRegexRules).
+                if (numDomainRegexes >= kMaxDomainRegexRules ||
+                    numDomainRegexes + numRegexApps >= kMaxRegexRules) {
                     droppedDomainRegexesOverCap++;
                     continue;
                 }

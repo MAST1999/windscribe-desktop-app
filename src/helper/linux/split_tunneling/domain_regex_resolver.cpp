@@ -24,7 +24,6 @@ namespace
 // reuse them, so this holds at most one in-flight query per id; a collision overwrites an older
 // entry, which costs one client a retry — the same behavior a NATted home router exhibits.
 constexpr size_t kMaxPending = 1024;
-constexpr int kUpstreamTimeoutMs = 2000;
 
 bool isUsableIpv4(const std::string &s)
 {
