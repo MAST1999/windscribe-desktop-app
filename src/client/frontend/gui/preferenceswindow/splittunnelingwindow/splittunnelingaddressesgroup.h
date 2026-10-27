@@ -54,7 +54,6 @@ private:
     // Routes managed by other groups (country / domain-regex entries); preserved verbatim so this
     // group's whole-list write-backs never delete them.
     QList<types::SplitTunnelingNetworkRoute> passthrough_;
-    QList<types::SplitTunnelingNetworkRoute> lastSeen_;   // full-list re-entrancy guard
     int numDomains_;
     int numIpRoutes_;
 };
