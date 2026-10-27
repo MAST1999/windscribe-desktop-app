@@ -61,6 +61,11 @@ private:
     // worker loops until the current path is up-to-date, so a command arriving mid-parse is
     // absorbed by the running worker instead.
     std::atomic<bool> geoipParseBusy_{false};
+    // Set by the destructor so the parse worker exits promptly; the worker thread is tracked
+    // (not detached) and joined in the destructor — exit() during an active parse would
+    // otherwise destroy singletons under a live thread.
+    std::atomic<bool> geoipStop_{false};
+    std::thread geoipThread_;
 
     // Worker body: parses the current GeoIP path (looping if it changes mid-run) and re-applies the
     // firewall so freshly parsed ranges (or an emptied selection) reach the kernel.

@@ -27,7 +27,7 @@ std::string fileStamp(const std::string &path, long long &size, long long &mtime
         return path + "|missing";
     }
     size = st.st_size;
-    mtime = static_cast<long long>(st.st_mtim.tv_sec);
+    mtime = (static_cast<long long>(st.st_mtim.tv_sec) * 1000000000LL) + static_cast<long long>(st.st_mtim.tv_nsec);
     return path + "|" + std::to_string(size) + "|" + std::to_string(mtime);
 }
 
@@ -43,6 +43,12 @@ SplitTunneling::SplitTunneling(): isSplitTunnelActive_(false), isExclude_(false)
 
 SplitTunneling::~SplitTunneling()
 {
+    // Stop the tracked parse worker before the singletons it touches are destroyed. The worker's
+    // iterations are bounded (one parse ≈ ≤1 s, applies are serialized), so this join is finite.
+    geoipStop_ = true;
+    if (geoipThread_.joinable()) {
+        geoipThread_.join();
+    }
 }
 
 bool SplitTunneling::setConnectParams(ConnectStatus &connectStatus)
@@ -78,10 +84,15 @@ void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bo
 
     // Kick the (re)parse off the IPC thread. The worker loops until the CURRENT path/contents are
     // up-to-date, so a V2 command arriving mid-parse is absorbed without stacking workers.
-    if (!geoipDatabasePath.empty() && !CountryRangesLoader::instance().isUpToDate(geoipDatabasePath)) {
+    if (!geoipStop_ && !geoipDatabasePath.empty() && !CountryRangesLoader::instance().isUpToDate(geoipDatabasePath)) {
         bool expected = false;
         if (geoipParseBusy_.compare_exchange_strong(expected, true)) {
-            std::thread(&SplitTunneling::geoipParseWorker, this).detach();
+            // The previous worker has released geoipParseBusy_ only after finishing; a still-
+            // joinable thread here is one that just exited — reclaim it before reassigning.
+            if (geoipThread_.joinable()) {
+                geoipThread_.join();
+            }
+            geoipThread_ = std::thread(&SplitTunneling::geoipParseWorker, this);
         }
     }
 
@@ -126,11 +137,20 @@ void SplitTunneling::updateDomainRegexState()
         resolver.setMatchedIpsHandler([](const std::vector<types::IpAddressRange> &ranges) {
             FirewallController::instance().addDynamicDomainIps(ranges);
         });
-        FirewallController::instance().setSplitTunnelDomainRegexState(true, upstreamV4, upstreamV6);
+        // Listen FIRST, arm the redirect SECOND: if the resolver cannot start (port bind conflict,
+        // upstream unreachable) it must never leave a live redirect pointed at a dead port. On the
+        // way down the order reverses (disarm, then stop) so redirected queries always have a
+        // listener while the redirect exists.
         resolver.enable();
+        if (resolver.isEnabled()) {
+            FirewallController::instance().setSplitTunnelDomainRegexState(true, upstreamV4, upstreamV6);
+        } else {
+            spdlog::warn("SplitTunneling: domain-regex resolver unavailable, feature disabled this session");
+            FirewallController::instance().setSplitTunnelDomainRegexState(false, std::string(), std::string());
+        }
     } else {
-        resolver.disable();
         FirewallController::instance().setSplitTunnelDomainRegexState(false, std::string(), std::string());
+        resolver.disable();
     }
 }
 
@@ -143,6 +163,9 @@ void SplitTunneling::geoipParseWorker()
     std::string lastFailedStamp;
 
     for (;;) {
+        if (geoipStop_) {
+            return;
+        }
         std::string path;
         long long size = 0, mtime = 0;
         {
@@ -174,6 +197,9 @@ void SplitTunneling::geoipParseWorker()
         // and mutex-protected — so a spawn that slips into the release window is fine. A file that
         // just failed keeps the worker asleep (stamp check above), not spinning.
         geoipParseBusy_ = false;
+        if (geoipStop_) {
+            return;
+        }
         std::lock_guard<std::mutex> guard(mutex_);
         const std::string fresh = geoipPath_;
         long long freshSize = 0, freshMtime = 0;

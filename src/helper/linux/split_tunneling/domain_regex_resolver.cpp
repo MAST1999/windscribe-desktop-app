@@ -88,13 +88,15 @@ void DomainRegexResolver::enable()
             return;   // feature inert: never hijack DNS without both halves
         }
     }
-    if (running_) {
+    // Internally idempotent: a second enable() while running (or racing one) must not overwrite
+    // the joinable thread_ handle (that would terminate the process or leak the old thread).
+    if (running_.exchange(true)) {
         return;
     }
     if (!openSockets()) {
+        running_ = false;
         return;
     }
-    running_ = true;
     thread_ = std::thread(&DomainRegexResolver::worker, this);
     spdlog::info("DomainRegexResolver: listening on {}:{}", kListenAddress, kListenPort);
 }
@@ -109,6 +111,14 @@ void DomainRegexResolver::disable()
     }
     closeSockets();
     spdlog::info("DomainRegexResolver: stopped");
+}
+
+// Joins the worker at static-destruction time. Without this, exit() (SIGTERM path) destroys the
+// static singleton while the detached-at-enable thread is still running — destroying a joinable
+// std::thread terminates the process outright.
+DomainRegexResolver::~DomainRegexResolver()
+{
+    disable();
 }
 
 bool DomainRegexResolver::openSockets()

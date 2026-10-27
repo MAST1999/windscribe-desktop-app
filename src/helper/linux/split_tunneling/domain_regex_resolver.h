@@ -61,6 +61,7 @@ public:
     // For tests/diagnostics: match one name against the current patterns.
     bool matches(const std::string &qname) const;
 
+    ~DomainRegexResolver();
 private:
     DomainRegexResolver() = default;
 

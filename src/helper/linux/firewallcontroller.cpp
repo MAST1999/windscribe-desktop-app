@@ -362,8 +362,12 @@ std::string FirewallController::buildSplitTunnelRules()
             buf += nft::ensureSet(set[0], set[1]);
         }
     } else {
+        // Flush (not just the sets): st_pre_cm's connmark rules would otherwise keep rewriting
+        // marks while the firewall stays up after ST turned off. create-if-absent+flush keeps
+        // this idempotent when the chains are already gone.
         buf += nft::ensureChain("st_route_out", "type route hook output priority -150;");
         buf += nft::ensureChain("st_nat_post", "type nat hook postrouting priority 100;");
+        buf += nft::ensureChain("st_pre_cm", "type filter hook prerouting priority -140;");
         buf += nft::ensureChain("st_dns_out", "type nat hook output priority -100;");
         for (const auto &set : kSetSpecs) {
             buf += nft::deleteSet(set[0], set[1]);
@@ -382,12 +386,12 @@ std::string FirewallController::buildSplitTunnelRules()
         buf += nft::ensureChain("st_route_out", "type route hook output priority -150;");
         buf += nft::ensureChain("st_nat_post", "type nat hook postrouting priority 100;");
         buf += nft::ensureChain("st_pre_cm", "type filter hook prerouting priority -140;");
-        if (domainRegexActive_) {
-            // DNS redirect for domain-regex classification. NAT output hook so locally generated
-            // queries are bounced to the resolver; the upstream is excluded so the resolver's own
-            // forwarded queries pass straight through.
-            buf += nft::ensureChain("st_dns_out", "type nat hook output priority -100;");
-        }
+        // st_dns_out is ensured (created + FLUSHED) whenever ST is active, not only when domain
+        // regex is armed: the flush is what removes a stale redirect when the feature disarms
+        // (patterns cleared, mode switch, upstream lost) while the user stays connected. Without
+        // it the last-armed redirect survives with nobody listening on the resolver port — a
+        // system-wide DNS blackhole until disconnect.
+        buf += nft::ensureChain("st_dns_out", "type nat hook output priority -100;");
 
         const bool defAdapterValid = !defaultAdapter_.empty() && Validation::isValidInterfaceName(defaultAdapter_);
         auto add = [&](const std::string &ch, const std::string &e) {
@@ -413,13 +417,21 @@ std::string FirewallController::buildSplitTunnelRules()
             // loopback query would be policy-routed out the physical interface (table 69) and die.
             // The resolver's own forwarded queries carry the upstream daddr and are unaffected.
             if (domainRegexActive_) {
+                // The return stops country/dyn marks from touching DNS, but the cgroup mark rule
+                // ABOVE has already run by this point — that is intentional: excluded apps' DNS
+                // must behave like all their traffic (marked, egressed the physical adapter,
+                // masqueraded) and therefore the redirect below EXCLUDES the cgroup. Without the
+                // exclusion a marked, redirected query would route 127.0.0.1 out the physical NIC
+                // (martian, dropped) and break excluded apps' DNS.
                 add("st_route_out", "udp dport 53 return");
                 if (!domainRegexUpstreamV4_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV4_)) {
-                    add("st_dns_out", "udp dport 53 ip daddr != " + domainRegexUpstreamV4_ + " redirect to :" +
+                    add("st_dns_out", "meta cgroup != " + classid + " udp dport 53 ip daddr != " +
+                                          domainRegexUpstreamV4_ + " redirect to :" +
                                           std::to_string(DomainRegexResolver::kListenPort));
                 }
                 if (!domainRegexUpstreamV6_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV6_)) {
-                    add("st_dns_out", "udp dport 53 ip6 daddr != " + domainRegexUpstreamV6_ + " redirect to :" +
+                    add("st_dns_out", "meta cgroup != " + classid + " udp dport 53 ip6 daddr != " +
+                                          domainRegexUpstreamV6_ + " redirect to :" +
                                           std::to_string(DomainRegexResolver::kListenPort));
                 }
             }
