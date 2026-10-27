@@ -38,6 +38,7 @@ set(SOURCES
     routes_manager/routes.cpp
     routes_manager/routes_manager.cpp
     split_tunneling/cgroups.cpp
+    split_tunneling/country_ranges_loader.cpp
     split_tunneling/process_monitor.cpp
     split_tunneling/split_tunneling.cpp
     split_tunneling/hostnames_manager/dns_resolver.cpp

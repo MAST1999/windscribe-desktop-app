@@ -72,4 +72,15 @@ if(IS_BUILD_TESTS)
     )
     set_target_properties(mainroutetable.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     ws_add_test(mainroutetable)
+
+    # GeoIP country-range loader tests.  country_ranges_loader.cpp needs only std + spdlog.
+    add_executable(countryranges.test
+        countryranges.test.cpp
+        ../split_tunneling/country_ranges_loader.cpp
+    )
+    target_link_libraries(countryranges.test PRIVATE
+        spdlog::spdlog
+    )
+    set_target_properties(countryranges.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    ws_add_test(countryranges)
 endif(IS_BUILD_TESTS)
