@@ -1,9 +1,12 @@
 #include "split_tunneling.h"
 
 #include <algorithm>
+#include <atomic>
+#include <thread>
 #include <spdlog/spdlog.h>
 #include "../firewallcontroller.h"
 #include "../utils.h"
+#include "country_ranges_loader.h"
 #include "types/ipaddress.h"
 
 SplitTunneling::SplitTunneling(): isSplitTunnelActive_(false), isExclude_(false), isAllowLanTraffic_(false)
@@ -25,6 +28,64 @@ bool SplitTunneling::setConnectParams(ConnectStatus &connectStatus)
     connectStatus_ = connectStatus;
     routesManager_.updateState(connectStatus_, isSplitTunnelActive_, isExclude_);
     return updateState();
+}
+
+void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bool isAllowLanTraffic,
+    const std::vector<std::string> &apps, const std::vector<std::string> &ips, const std::vector<std::string> &hosts,
+    const std::vector<std::string> &regexProcessRules, const std::vector<std::string> &regexDomainRules,
+    const std::vector<std::string> &countryCodes, const std::string &geoipDatabasePath)
+{
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        regexProcessRules_ = regexProcessRules;
+        regexDomainRules_ = regexDomainRules;
+        countries_ = countryCodes;
+        geoipPath_ = geoipDatabasePath;
+    }
+
+    // Push the (possibly emptied) selection to the firewall right away: the sets get rebuilt from
+    // whatever ranges the loader currently holds — empty when the file is not parsed (yet), so a
+    // half-ready state degrades to "no country rules", never to broken rules. The GeoIP parse
+    // worker re-applies once ranges become available.
+    FirewallController::instance().setSplitTunnelCountryRules(countryCodes);
+
+    // Kick the (re)parse off the IPC thread. The worker loops until the CURRENT path/contents are
+    // up-to-date, so a V2 command arriving mid-parse is absorbed without stacking workers.
+    if (!geoipDatabasePath.empty() && !CountryRangesLoader::instance().isUpToDate(geoipDatabasePath)) {
+        bool expected = false;
+        if (geoipParseBusy_.compare_exchange_strong(expected, true)) {
+            std::thread(&SplitTunneling::geoipParseWorker, this).detach();
+        }
+    }
+
+    // Base fields follow the unchanged V1 flow (apps/ips/hosts -> monitor/routes/firewall).
+    setSplitTunnelingParams(isActive, isExclude, apps, ips, hosts, isAllowLanTraffic);
+}
+
+void SplitTunneling::geoipParseWorker()
+{
+    for (;;) {
+        std::string path;
+        {
+            std::lock_guard<std::mutex> guard(mutex_);
+            path = geoipPath_;
+        }
+        if (path.empty() || CountryRangesLoader::instance().isUpToDate(path)) {
+            break;
+        }
+        std::string err;
+        if (!CountryRangesLoader::instance().ensureLoaded(path, &err)) {
+            // The loader keeps its previous index on failure; re-apply anyway so the firewall
+            // reflects a consistent (possibly stale/empty) country selection, and stop retrying —
+            // a changed or fixed file arrives via the next V2 command or (size, mtime) change.
+            spdlog::warn("SplitTunneling: GeoIP database unusable ({}), country rules off until the file changes", err);
+            FirewallController::instance().applySplitTunnel();
+            break;
+        }
+        spdlog::info("SplitTunneling: GeoIP database loaded, re-applying country rules");
+        FirewallController::instance().applySplitTunnel();
+    }
+    geoipParseBusy_ = false;
 }
 
 void SplitTunneling::setSplitTunnelingParams(bool isActive, bool isExclude, const std::vector<std::string> &apps,

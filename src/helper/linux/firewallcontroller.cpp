@@ -14,7 +14,33 @@
 #include "network_marks.h"
 #include "nftables/nftablescontroller.h"
 #include "split_tunneling/cgroups.h"
+#include "split_tunneling/country_ranges_loader.h"
 #include "utils.h"
+
+namespace
+{
+
+// Formats an inclusive range the way nft interval-set elements accept it: "a.b.c.d-e.f.g.h".
+std::string ip4ToString(uint32_t ip)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+             (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF);
+    return buf;
+}
+
+std::string ip6ToString(const uint8_t ip[16])
+{
+    char buf[INET6_ADDRSTRLEN] = {};
+    struct in6_addr a = {};
+    std::memcpy(a.s6_addr, ip, 16);
+    if (inet_ntop(AF_INET6, &a, buf, sizeof(buf)) == nullptr) {
+        return std::string();
+    }
+    return buf;
+}
+
+} // namespace
 
 FirewallController::FirewallController() : connected_(false), splitTunnelEnabled_(false), splitTunnelExclude_(true)
 {
@@ -314,6 +340,12 @@ std::string FirewallController::buildSplitTunnelRules()
     buf += nft::ensureChain("st_in");
     buf += nft::ensureChain("st_out");
 
+    // Country pass-through sets always exist and are always emptied here; elements are only
+    // repopulated for the active exclude-mode case below. This keeps the rule text free of
+    // references to sets that might not exist, and makes clearing the selection self-cleaning.
+    buf += nft::ensureSet("ws_countries", "type ipv4_addr; flags interval;");
+    buf += nft::ensureSet("ws_countries6", "type ipv6_addr; flags interval;");
+
     if (connected_ && splitTunnelEnabled_) {
         // The routing/NAT/connmark base chains are only needed while split tunneling is active, so
         // create them HERE rather than on every firewall apply. Re-issuing `add chain { type … hook … }`
@@ -364,6 +396,45 @@ std::string FirewallController::buildSplitTunnelRules()
             add("st_in",  "meta cgroup " + classid + " accept");
             add("st_in",  "meta mark " + mark + " accept");
             add("st_out", "meta cgroup " + classid + " accept");
+
+            // Country pass-through: destinations in the selected countries ride the same mark ->
+            // table 69 (physical egress) policy routing as cgroup traffic, with the same connmark
+            // reply-path handling via st_pre_cm. The mark rule must come BEFORE the cgroup rule is
+            // irrelevant (both set the same mark), but the set-based kill-switch accepts parallel
+            // the per-IP accepts above. An empty selection or empty GeoIP index yields empty sets:
+            // the rules are then no-ops with zero per-packet cost beyond one set lookup per packet.
+            if (!splitTunnelCountries_.empty()) {
+                const auto ranges4 = CountryRangesLoader::instance().unionRanges4(splitTunnelCountries_);
+                const auto ranges6 = CountryRangesLoader::instance().unionRanges6(splitTunnelCountries_);
+                if (!ranges4.empty()) {
+                    std::vector<std::string> elems;
+                    elems.reserve(ranges4.size());
+                    for (const auto &r : ranges4) {
+                        elems.push_back(ip4ToString(r.from) + "-" + ip4ToString(r.to));
+                    }
+                    buf += nft::setElements("ws_countries", elems);
+                    if (defAdapterValid) {
+                        add("st_nat_post", "ip daddr @ws_countries oifname \"" + defaultAdapter_ + "\" masquerade");
+                    }
+                    add("st_route_out", "ip daddr @ws_countries meta mark set " + mark + " ct mark set " + mark);
+                    add("st_in",  "ip saddr @ws_countries accept");
+                    add("st_out", "ip daddr @ws_countries accept");
+                }
+                if (!ranges6.empty()) {
+                    std::vector<std::string> elems;
+                    elems.reserve(ranges6.size());
+                    for (const auto &r : ranges6) {
+                        elems.push_back(ip6ToString(r.from) + "-" + ip6ToString(r.to));
+                    }
+                    buf += nft::setElements("ws_countries6", elems);
+                    if (defAdapterValid) {
+                        add("st_nat_post", "ip6 daddr @ws_countries6 oifname \"" + defaultAdapter_ + "\" masquerade");
+                    }
+                    add("st_route_out", "ip6 daddr @ws_countries6 meta mark set " + mark + " ct mark set " + mark);
+                    add("st_in",  "ip6 saddr @ws_countries6 accept");
+                    add("st_out", "ip6 daddr @ws_countries6 accept");
+                }
+            }
         } else {
             // Inclusive: everything NOT in the cgroup bypasses the tunnel. connmark carries the mark
             // across the reply path. The egress MARK, the reply-path restore, and the ingress connmark
@@ -435,6 +506,16 @@ bool FirewallController::setSplitTunnelIpExceptions(const std::vector<types::IpA
         return applySplitTunnel();
     }
     return true;
+}
+
+void FirewallController::setSplitTunnelCountryRules(const std::vector<std::string> &countryCodes)
+{
+    // Store + apply under one lock (same mutate-then-apply atomicity as setSplitTunnelingEnabled).
+    // Safe to call from the GeoIP parse worker: the recursive lock also serializes against the
+    // DNS-resolver thread's applySplitTunnel.
+    std::lock_guard<std::recursive_mutex> lock(stateMutex_);
+    splitTunnelCountries_ = countryCodes;
+    applySplitTunnel();
 }
 
 void FirewallController::probeInterfaceAddresses(const std::string &iface, std::vector<std::string> &v4Addrs, bool &hasNonLinkLocalV6)

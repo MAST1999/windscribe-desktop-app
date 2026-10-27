@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <mutex>
 #include <string>
+#include <vector>
 
 // The single nftables table the helper owns (e.g. "inet windscribe"). All firewall, DNS-leak, boot,
 // and WireGuard chains live in this one table, so this name is the single source for every subsystem.
@@ -38,6 +40,36 @@ inline std::string ensureChain(const std::string &name, const std::string &spec 
 inline std::string deleteChain(const std::string &name)
 {
     return "add chain " + kNftTable + " " + name + "\ndelete chain " + kNftTable + " " + name + "\n";
+}
+
+// Create-if-absent for a named set, then flush its elements. Re-issuing `add set` with the same
+// spec on an existing set is a no-op (same idiom as ensureChain); `flush` empties it so each apply
+// repopulates from full state. The set is intentionally kept (empty) when unused — deleting it
+// would need the EBUSY-prone delete idiom, and an empty set costs effectively nothing.
+inline std::string ensureSet(const std::string &name, const std::string &spec)
+{
+    return "add set " + kNftTable + " " + name + " { " + spec + " }\n"
+           "flush set " + kNftTable + " " + name + "\n";
+}
+
+// One or more `add element <table> <set> { e0, e1, ... }` lines, batched so a large element set
+// stays within sane buffer/statement sizes.
+inline std::string setElements(const std::string &name, const std::vector<std::string> &elements)
+{
+    constexpr size_t kBatch = 256;
+    std::string out;
+    for (size_t i = 0; i < elements.size(); i += kBatch) {
+        const size_t end = std::min(i + kBatch, elements.size());
+        out += "add element " + kNftTable + " " + name + " { ";
+        for (size_t j = i; j < end; ++j) {
+            if (j != i) {
+                out += ", ";
+            }
+            out += elements[j];
+        }
+        out += " }\n";
+    }
+    return out;
 }
 
 // One `add rule <table> <chain> <expr>` line.

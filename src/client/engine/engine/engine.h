@@ -125,7 +125,9 @@ public:
     void detectAppropriatePacketSize();
     void setSettingsMacAddressSpoofing(const types::MacAddrSpoofing &macAddrSpoofing);
     void setSplitTunnelingSettings(bool isActive, bool isExclude, const QStringList &files,
-                                   const QStringList &ips, const QStringList &hosts);
+                                   const QStringList &ips, const QStringList &hosts,
+                                   const QStringList &regexProcessApps, const QStringList &regexDomainRules,
+                                   const QStringList &countries, const QString &geoipDatabasePath);
     // Sets whether SSL certificate errors are ignored for wsnet API/bridge requests. This is a
     // session-only runtime value (never persisted); it resets to false on the next app launch. Enabled
     // by the user after a login/failover failure prompts the SSL-error dialog.
@@ -255,7 +257,9 @@ private slots:
 
     void setSettingsMacAddressSpoofingImpl(const types::MacAddrSpoofing &macAddrSpoofing);
     void setSplitTunnelingSettingsImpl(bool isActive, bool isExclude, const QStringList &files,
-                                       const QStringList &ips, const QStringList &hosts);
+                                       const QStringList &ips, const QStringList &hosts,
+                                       const QStringList &regexProcessApps, const QStringList &regexDomainRules,
+                                       const QStringList &countries, const QString &geoipDatabasePath);
 
     void onApiResourcesManagerReadyForLogin(bool isLoginFromSavedSettings);
     void onApiResourcesManagerLoginFailed(wsnet::LoginResult loginResult, const QString &errorMessage);

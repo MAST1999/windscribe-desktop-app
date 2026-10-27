@@ -30,6 +30,17 @@ void Helper_posix::setSplitTunnelingSettings(bool isActive, bool isExclude, bool
                 toStdVector(files), toStdVector(ips), toStdVector(hosts));
 }
 
+void Helper_posix::setSplitTunnelingSettingsV2(bool isActive, bool isExclude, bool isAllowLanTraffic,
+                                               const QStringList &files, const QStringList &ips, const QStringList &hosts,
+                                               const QStringList &regexProcessRules, const QStringList &regexDomainRules,
+                                               const QStringList &countryCodes, const QString &geoipDatabasePath)
+{
+    sendCommand(HelperCommand::setSplitTunnelingSettingsV2, isActive, isExclude, isAllowLanTraffic,
+                toStdVector(files), toStdVector(ips), toStdVector(hosts),
+                toStdVector(regexProcessRules), toStdVector(regexDomainRules), toStdVector(countryCodes),
+                geoipDatabasePath.toStdString());
+}
+
 bool Helper_posix::sendConnectStatus(bool isConnected, bool isTerminateSocket, bool isKeepLocalSocket, const AdapterGatewayInfo &defaultAdapter, const AdapterGatewayInfo &vpnAdapter, const QString &connectedIp, const types::Protocol &protocol, const QStringList &dnsWhitelistIps)
 {
     auto fillAdapterInfo = [](const AdapterGatewayInfo &a, ADAPTER_GATEWAY_INFO &out) {

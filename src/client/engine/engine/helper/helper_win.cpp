@@ -34,6 +34,29 @@ void Helper_win::setSplitTunnelingSettings(bool isActive, bool isExclude, bool i
                 toStdVector(files), toStdVector(ips), toStdVector(hosts));
 }
 
+void Helper_win::setSplitTunnelingSettingsV2(bool isActive, bool isExclude, bool isAllowLanTraffic,
+                                             const QStringList &files, const QStringList &ips, const QStringList &hosts,
+                                             const QStringList &regexProcessRules, const QStringList &regexDomainRules,
+                                             const QStringList &countryCodes, const QString &geoipDatabasePath)
+{
+    // The V1 fields serialize as universal_string (wstring on Windows) to match the helper's V1
+    // handling; the new-kind lists and the GeoIP path are narrow std::string on every platform
+    // (patterns/codes/paths are read by the helper as std::string, mirroring its V2 handler).
+    auto toStringVector = [](const QStringList &list) {
+        std::vector<std::string> out;
+        out.reserve(list.size());
+        for (const QString &s : list) {
+            out.push_back(s.toStdString());
+        }
+        return out;
+    };
+
+    sendCommand(HelperCommand::setSplitTunnelingSettingsV2, isActive, isExclude, isAllowLanTraffic,
+                toStdVector(files), toStdVector(ips), toStdVector(hosts),
+                toStringVector(regexProcessRules), toStringVector(regexDomainRules), toStringVector(countryCodes),
+                geoipDatabasePath.toStdString());
+}
+
 bool Helper_win::sendConnectStatus(bool isConnected, bool isTerminateSocket, bool isKeepLocalSocket, const AdapterGatewayInfo &defaultAdapter, const AdapterGatewayInfo &vpnAdapter,
                                const QString &connectedIp, const types::Protocol &protocol, const QStringList &dnsWhitelistIps,
                                bool isVpnSessionActive)

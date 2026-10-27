@@ -542,11 +542,15 @@ void Engine::setSettingsMacAddressSpoofing(const types::MacAddrSpoofing &macAddr
 }
 
 void Engine::setSplitTunnelingSettings(bool isActive, bool isExclude, const QStringList &files,
-                                       const QStringList &ips, const QStringList &hosts)
+                                       const QStringList &ips, const QStringList &hosts,
+                                       const QStringList &regexProcessApps, const QStringList &regexDomainRules,
+                                       const QStringList &countries, const QString &geoipDatabasePath)
 {
     QMetaObject::invokeMethod(this, "setSplitTunnelingSettingsImpl", Q_ARG(bool, isActive),
                               Q_ARG(bool, isExclude), Q_ARG(QStringList, files),
-                              Q_ARG(QStringList, ips), Q_ARG(QStringList, hosts));
+                              Q_ARG(QStringList, ips), Q_ARG(QStringList, hosts),
+                              Q_ARG(QStringList, regexProcessApps), Q_ARG(QStringList, regexDomainRules),
+                              Q_ARG(QStringList, countries), Q_ARG(QString, geoipDatabasePath));
 }
 
 void Engine::updateWindowInfo(qint32 windowCenterX, qint32 windowCenterY)
@@ -873,7 +877,10 @@ void Engine::onInitializeHelper(INIT_HELPER_RET ret)
         // turn off split tunneling (for case the state remains from the last launch)
         helper_->sendConnectStatus(false, engineSettings_.isTerminateSockets(), engineSettings_.isAllowLanTraffic(), AdapterGatewayInfo::detectAndCreateDefaultAdapterInfo(), AdapterGatewayInfo(), QString(), types::Protocol());
 
-        helper_->setSplitTunnelingSettings(false, false, false, QStringList(), QStringList(), QStringList());
+        // V2 with everything empty also clears the regex/country state (V1 would leave the
+        // FirewallController's country selection armed for the next connect).
+        helper_->setSplitTunnelingSettingsV2(false, false, false, QStringList(), QStringList(), QStringList(),
+                                             QStringList(), QStringList(), QStringList(), QString());
 
     #ifdef Q_OS_WIN
         // check BFE service status
@@ -949,7 +956,8 @@ void Engine::cleanupImpl(bool isUpdating)
     // turn off split tunneling
     if (helper_) {
         helper_->sendConnectStatus(false, engineSettings_.isTerminateSockets(), engineSettings_.isAllowLanTraffic(), AdapterGatewayInfo::detectAndCreateDefaultAdapterInfo(), AdapterGatewayInfo(), QString(), types::Protocol());
-        helper_->setSplitTunnelingSettings(false, false, false, QStringList(), QStringList(), QStringList());
+        helper_->setSplitTunnelingSettingsV2(false, false, false, QStringList(), QStringList(), QStringList(),
+                                             QStringList(), QStringList(), QStringList(), QString());
     }
 
 #ifdef Q_OS_WIN
@@ -2548,10 +2556,21 @@ void Engine::setSettingsMacAddressSpoofingImpl(const types::MacAddrSpoofing &mac
     emit macAddrSpoofingChanged(engineSettings_);
 }
 
-void Engine::setSplitTunnelingSettingsImpl(bool isActive, bool isExclude, const QStringList &files, const QStringList &ips, const QStringList &hosts)
+void Engine::setSplitTunnelingSettingsImpl(bool isActive, bool isExclude, const QStringList &files, const QStringList &ips, const QStringList &hosts,
+                                           const QStringList &regexProcessApps, const QStringList &regexDomainRules,
+                                           const QStringList &countries, const QString &geoipDatabasePath)
 {
     WS_ASSERT(helper_ != NULL);
+
+#ifdef Q_OS_LINUX
+    // Linux is the only platform that enforces the new rule kinds today; the V2 command degrades
+    // gracefully on helpers that predate it (same release ships client + helper, so this is the
+    // normal path).
+    helper_->setSplitTunnelingSettingsV2(isActive, isExclude, engineSettings_.isAllowLanTraffic(), files, ips, hosts,
+                                         regexProcessApps, regexDomainRules, countries, geoipDatabasePath);
+#else
     helper_->setSplitTunnelingSettings(isActive, isExclude, engineSettings_.isAllowLanTraffic(), files, ips, hosts);
+#endif
 
 #ifdef Q_OS_MACOS
     // Identical resends are deduped by the manager; a real change restarts the session so the new
@@ -2566,6 +2585,11 @@ void Engine::setSplitTunnelingSettingsImpl(bool isActive, bool isExclude, const 
     } else {
         SplitTunnelExtensionManager::instance().stopExtension();
     }
+#else
+    Q_UNUSED(regexProcessApps)
+    Q_UNUSED(regexDomainRules)
+    Q_UNUSED(countries)
+    Q_UNUSED(geoipDatabasePath)
 #endif
 }
 

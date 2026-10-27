@@ -22,6 +22,13 @@ public:
     void setSplitTunnelingSettings(bool isActive, bool isExclude, bool isAllowLanTraffic,
                                    const QStringList &files, const QStringList &ips,
                                    const QStringList &hosts);
+    // V2: the V1 tuple plus the regex/country rule kinds and the user-provided GeoIP database
+    // path. On Linux the helper enforces everything; on macOS it parses and enforces only the V1
+    // subset (see docs/plans/split-tunneling-regex-and-country.md).
+    void setSplitTunnelingSettingsV2(bool isActive, bool isExclude, bool isAllowLanTraffic,
+                                     const QStringList &files, const QStringList &ips, const QStringList &hosts,
+                                     const QStringList &regexProcessRules, const QStringList &regexDomainRules,
+                                     const QStringList &countryCodes, const QString &geoipDatabasePath);
     bool sendConnectStatus(bool isConnected, bool isTerminateSocket, bool isKeepLocalSocket,
                            const AdapterGatewayInfo &defaultAdapter, const AdapterGatewayInfo &vpnAdapter,
                            const QString &connectedIp, const types::Protocol &protocol,

@@ -947,25 +947,37 @@ void Backend::sendSplitTunneling(const types::SplitTunneling &st)
     bool isExclude = st.settings.mode == SPLIT_TUNNELING_MODE_EXCLUDE;
 
     QStringList files;
+    QStringList regexProcessApps;
     for (int i = 0; i < st.apps.size(); ++i) {
         if (st.apps[i].active) {
-            files << st.apps[i].fullName;
+            if (st.apps[i].isRegex) {
+                regexProcessApps << st.apps[i].fullName;
+            } else {
+                files << st.apps[i].fullName;
+            }
         }
     }
 
     QStringList ips;
     QStringList hosts;
+    QStringList regexDomains;
+    QStringList countries;
     for (int i = 0; i < st.networkRoutes.size(); ++i) {
         if (st.networkRoutes[i].active) {
             if (st.networkRoutes[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP) {
                 ips << st.networkRoutes[i].name;
             } else if (st.networkRoutes[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME) {
                 hosts << st.networkRoutes[i].name;
+            } else if (st.networkRoutes[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
+                regexDomains << st.networkRoutes[i].name;
+            } else if (st.networkRoutes[i].type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY) {
+                countries << st.networkRoutes[i].name;
             }
         }
     }
 
-    engine_->setSplitTunnelingSettings(isActive, isExclude, files, ips, hosts);
+    engine_->setSplitTunnelingSettings(isActive, isExclude, files, ips, hosts,
+                                       regexProcessApps, regexDomains, countries, st.geoipDatabasePath);
     emit splitTunnelingStateChanged(st.settings.active);
 }
 

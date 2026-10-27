@@ -55,12 +55,21 @@ public:
         const std::string &adapterIpV6);
 
     // Stores the dual-stack split-tunnel exception list (each entry emitted with its family's nft
-    // qualifier) and, by default (applyNow=true), applies it as one nft transaction — so a caller that
-    // merely sets exceptions can never silently leave them uninstalled. Pass applyNow=false to store
-    // WITHOUT applying, valid ONLY when a setSplitTunnelingEnabled() (which rebuilds and applies from
-    // full state) is guaranteed to follow, e.g. the connect path, to avoid a wasted transaction.
-    // Returns false if applyNow and the nft apply was rejected.
+    // qualifier) and, by default (applyNow=true), applies it as one nft transaction — so a caller
+    // that merely sets exceptions can never silently leave them uninstalled. Pass applyNow=false to
+    // store WITHOUT applying, valid ONLY when a setSplitTunnelingEnabled() (which rebuilds and
+    // applies from full state) is guaranteed to follow, e.g. the connect path, to avoid a wasted
+    // transaction. Returns false if applyNow and the nft apply was rejected.
     bool setSplitTunnelIpExceptions(const std::vector<types::IpAddressRange> &ips, bool applyNow = true);
+
+    // Destination-country pass-through (Linux country rules). `countryCodes` are lowercase ISO
+    // 3166-1 alpha-2 codes; the ranges come from CountryRangesLoader (already parsed by the time
+    // this is called — SplitTunneling drives the parse). Stores the codes and applies them as one
+    // nft transaction: country traffic is marked into the physical egress table (the same mark the
+    // cgroup path uses), masqueraded, and accepted through the kill-switch via set-based accepts.
+    // No-op (and flushed) in include mode.
+    void setSplitTunnelCountryRules(const std::vector<std::string> &countryCodes);
+
     // Rebuilds and applies the split-tunnel chains from the current state as one nft transaction.
     // Call after setSplitTunnelIpExceptions() outside the connect path. Returns false (and logs) if
     // the nft apply is rejected, so the failure isn't swallowed.
@@ -81,6 +90,8 @@ private:
     bool splitTunnelEnabled_;
     bool splitTunnelExclude_;
     std::vector<types::IpAddressRange> splitTunnelIps_;
+    // Lowercase ISO country codes for destination-country pass-through (empty = feature off).
+    std::vector<std::string> splitTunnelCountries_;
     std::string defaultAdapter_;
     std::string defaultAdapterIp_;
     std::string defaultAdapterIpV6_;
