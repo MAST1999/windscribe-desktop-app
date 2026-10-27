@@ -1,7 +1,7 @@
 # Plan: Regex-Based Split Tunneling + Country-Based Pass-Through
 
 Branch: `feature/split-tunneling-regex-and-country`
-Status: design / planning
+Status: **Phases 1–3 implemented on this branch** (see "Implementation status" at the bottom).
 Scope decision: Linux implementation first; config model designed cross-platform. Regex applies to
 **process paths and domains**. Country pass-through = **destination-IP GeoIP → direct (bypass tunnel)**,
 selected via a country picker backed by a **user-provided GeoIP database file**: the user downloads
@@ -422,3 +422,23 @@ Each phase is independently shippable and revertable.
 - RE2 design (linear time, untrusted patterns) — https://swtch.com/~rsc/regexp/regexp3.html
 - v2fly/geoip (GeoIP.dat pipeline) — https://github.com/v2fly/geoip
 - MaxMind DB format spec (binary search tree, µs lookups) — https://maxmind.github.io/MaxMind-DB/
+
+---
+
+## 10. Implementation status (this branch)
+
+| Phase | State | Key commits / artifacts |
+|---|---|---|
+| 1 — Country pass-through (Linux) | **Implemented** | `CountryRangesLoader` (+ `countryranges.test`, passing natively); `setSplitTunnelingSettingsV2` IPC (appended last, Win/mac parse-and-forward V1 subset); `ws_countries`/`ws_countries6` interval sets reusing the mark → table 69 pipeline; countries UI group + BYOD path entry; CLI `country:<cc>` |
+| 2 — Regex process rules (Linux) | **Implemented** | RE2 via vcpkg; `ProcessMonitor::setRegexApps` (compile on the rules worker, partial-match on exe, argv under the wine-host gate); `regex_matching.h` (+ `regexrules.test`, passing natively); GUI "Add regex rule" box; CLI `re:` prefixes |
+| 3 — Regex domain rules (Linux) | **Implemented** (v1: UDP/53 only) | `dns_parse` (+ `dnsparsing.test`, passing natively); `DomainRegexResolver` forward-and-inspect proxy on 127.0.0.1:15353; `st_dns_out` redirect (upstream-excluded), udp/53 unmarked; `ws_dyn_domains` sets fed from matched answers |
+| 4 — Windows/macOS | **Groundwork only** (per plan §5.6) | V2 IPC handlers parse and enforce the V1 subset; model/serialization ready |
+
+Verification limits: Qt/boost-dependent translation units (GUI, Engine, RPC dispatch) are written
+against the existing codebase patterns but have NOT been compiled in this environment (no Qt/boost
+toolchain available here). Framework-free helper logic (GeoIP parsing/merging, DNS wire parsing,
+regex match policy, wine path matching) is compiled with `-Wall -Wextra` and its tests pass.
+
+Remaining follow-ups: perf script (toggle timing with 1/3/10 countries), kill-switch-on manual pass,
+GUI flag icons on country rows, Windows WFP/macOS NE adoption, re2 vendoring review for the vcpkg
+custom triplets.
