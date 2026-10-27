@@ -13,6 +13,8 @@ public:
     static bool isIpCidr(const QString &str);
     static bool isDomain(const QString &str);
     static bool isDomainWithWildcard(const QString &str);
+    // ISO 3166-1 alpha-2 country code: exactly two ASCII letters (any case).
+    static bool isCountryCode(const QString &str);
     static bool isIpOrDomain(const QString &str);
     static bool isIpCidrOrDomain(const QString &str);
     static bool isCtrldCorrectAddress(const QString &str);

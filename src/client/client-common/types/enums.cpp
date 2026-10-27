@@ -97,8 +97,10 @@ template <>
 struct EnumInfo<SPLIT_TUNNELING_NETWORK_ROUTE_TYPE>
 {
     static constexpr EnumDesc<SPLIT_TUNNELING_NETWORK_ROUTE_TYPE> table[] = {
-        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP,       "", false },
-        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME, "", false },
+        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP,           "", false },
+        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME,     "", false },
+        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY,      "", false },
+        { SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX, "", false },
     };
     static constexpr SPLIT_TUNNELING_NETWORK_ROUTE_TYPE kDefaultInt = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP;
 };

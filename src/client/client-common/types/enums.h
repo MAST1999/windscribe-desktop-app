@@ -200,7 +200,13 @@ enum SPLIT_TUNNELING_APP_TYPE {
 
 enum SPLIT_TUNNELING_NETWORK_ROUTE_TYPE {
     SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP = 0,
-    SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME = 1
+    SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME = 1,
+    // Destination country (ISO 3166-1 alpha-2, lowercased). Linux: enforced with nftables
+    // interval sets in the split-tunnel table; a no-op in include mode.
+    SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY = 2,
+    // Domain regex (RE2 pattern). Shape-validated up front; DNS-layer enforcement ships with
+    // the domain-regex phase, so entries of this kind are carried but not yet enforced.
+    SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX = 3
 };
 
 enum ORDER_LOCATION_TYPE {

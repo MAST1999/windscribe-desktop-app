@@ -89,6 +89,9 @@ private:
 
 struct SplitTunnelingNetworkRoute
 {
+    // Max length of a domain-regex pattern (bounds compile cost and IPC size).
+    static constexpr int kMaxRegexLen = 512;
+
     SPLIT_TUNNELING_NETWORK_ROUTE_TYPE type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP;
     QString name;
     bool active = true;
@@ -160,19 +163,41 @@ struct SplitTunnelingNetworkRoute
 
     bool isValidName() const
     {
-        return NetworkingValidation::isIpCidrOrDomain(name);
+        switch (type) {
+        case SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP:
+            return NetworkingValidation::isIpCidr(name);
+        case SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY:
+            return NetworkingValidation::isCountryCode(name);
+        case SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX:
+            // Structural check only; RE2-parse validation happens where RE2 is linked (GUI entry
+            // and Phase-2 enforcement). Bounds + printable single line keep garbage out of IPC.
+            return !name.isEmpty() && name.size() <= kMaxRegexLen &&
+                   !name.contains(QChar(0)) && NetworkingValidation::isPrintableSingleLineAscii(name);
+        case SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME:
+        default:
+            return NetworkingValidation::isDomain(name);
+        }
     }
 
     void validate()
     {
         type = enumFromInt<SPLIT_TUNNELING_NETWORK_ROUTE_TYPE>(static_cast<int>(type));
-        // The name shape is authoritative; a mismatched declared type is corrected.
-        if (!name.isEmpty()) {
-            if (NetworkingValidation::isIpCidr(name)) {
-                type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP;
-            } else {
-                type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME;
-            }
+        if (name.isEmpty()) {
+            return;
+        }
+        if (type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY) {
+            name = name.toLower();
+            return;
+        }
+        if (type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
+            return;
+        }
+        // The name shape is authoritative for the two legacy kinds; a mismatched declared type is
+        // corrected. New kinds are trusted (a regex/country string is not shape-detectable).
+        if (NetworkingValidation::isIpCidr(name)) {
+            type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP;
+        } else {
+            type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME;
         }
     }
 
@@ -191,6 +216,10 @@ struct SplitTunnelingApp
 
     SplitTunnelingApp(const QJsonObject &json)
     {
+        if (json.contains(kJsonIsRegexProp) && json[kJsonIsRegexProp].isBool()) {
+            isRegex = json[kJsonIsRegexProp].toBool();
+        }
+
         if (json.contains(kJsonTypeProp) && json[kJsonTypeProp].isDouble()) {
             type = enumFromInt<SPLIT_TUNNELING_APP_TYPE>(json[kJsonTypeProp].toInt());
         }
@@ -201,15 +230,21 @@ struct SplitTunnelingApp
 
         if (json.contains(kJsonFullNameProp) && json[kJsonFullNameProp].isString()) {
             QString path = json[kJsonFullNameProp].toString();
-#ifdef Q_OS_LINUX
-            // Linux Flatpak entries store the app ID (e.g. org.mozilla.firefox) here, which has no
-            // on-disk path. Only run the existence check for path-shaped values.
-            const bool isPath = path.startsWith('/');
-#else
-            const bool isPath = true;
-#endif
-            if (!isPath || QFile::exists(path)) {
+            if (isRegex) {
+                // A regex entry's fullName is the pattern itself, never a file path: skip the
+                // existence check entirely.
                 fullName = path;
+            } else {
+#ifdef Q_OS_LINUX
+                // Linux Flatpak entries store the app ID (e.g. org.mozilla.firefox) here, which has no
+                // on-disk path. Only run the existence check for path-shaped values.
+                const bool isPath = path.startsWith('/');
+#else
+                const bool isPath = true;
+#endif
+                if (!isPath || QFile::exists(path)) {
+                    fullName = path;
+                }
             }
         }
 
@@ -228,10 +263,12 @@ struct SplitTunnelingApp
     }
 
     bool active = true;
-    QString fullName;   // path + name
+    QString fullName;   // path + name; for isRegex entries, the regex pattern itself
     QString name;
     QString icon;
     SPLIT_TUNNELING_APP_TYPE type = SPLIT_TUNNELING_APP_TYPE_USER;
+    // True when fullName is a regex pattern matched against process paths, not a file path.
+    bool isRegex = false;
 
     bool operator==(const SplitTunnelingApp &other) const
     {
@@ -239,7 +276,8 @@ struct SplitTunnelingApp
                other.name == name &&
                other.fullName == fullName &&
                other.active == active &&
-               other.icon == icon;
+               other.icon == icon &&
+               other.isRegex == isRegex;
     }
 
     bool operator!=(const SplitTunnelingApp &other) const
@@ -260,13 +298,14 @@ struct SplitTunnelingApp
             json[kJsonFullNameProp] = fullName;
             json[kJsonIconProp] = icon;
         }
+        json[kJsonIsRegexProp] = isRegex;
         return json;
     }
 
     friend QDataStream& operator <<(QDataStream &stream, const SplitTunnelingApp &o)
     {
         stream << versionForSerialization_;
-        stream << o.type << o.name << o.fullName << o.active << o.icon;
+        stream << o.type << o.name << o.fullName << o.active << o.icon << o.isRegex;
         return stream;
     }
 
@@ -283,12 +322,22 @@ struct SplitTunnelingApp
         if (version >= 2) {
             stream >> o.icon;
         }
+        if (version >= 3) {
+            stream >> o.isRegex;
+        } else {
+            o.isRegex = false;
+        }
         return stream;
     }
 
     void validate()
     {
         type = enumFromInt<SPLIT_TUNNELING_APP_TYPE>(static_cast<int>(type));
+        if (isRegex) {
+            // A regex entry's fullName is the pattern itself, not a filesystem path: path
+            // cleanup would corrupt the pattern.
+            return;
+        }
         // The Windows file dialog returns forward slashes, while the app picker uses backslashes. Doubled or trailing
         // separators name the same app, so they are dropped for the duplicate check.
         fullName = QDir::toNativeSeparators(QDir::cleanPath(fullName));
@@ -300,8 +349,9 @@ private:
     static const inline QString kJsonNameProp = "name";
     static const inline QString kJsonIconProp = "icon";
     static const inline QString kJsonTypeProp = "type";
+    static const inline QString kJsonIsRegexProp = "isRegex";
 
-    static constexpr quint32 versionForSerialization_ = 2;  // should increment the version if the data format is changed
+    static constexpr quint32 versionForSerialization_ = 3;  // should increment the version if the data format is changed
 };
 
 
@@ -311,6 +361,10 @@ struct SplitTunneling
     static constexpr int kMaxHostnames = 50;
     static constexpr int kMaxIpRoutes = 4096;
     static constexpr int kMaxStringLen = 4096;
+    // New-rule-kind caps. Countries are destination sets expanded kernel-side (each adds thousands
+    // of nft set elements), so the cap is tight; regex patterns are cheap but bounded anyway.
+    static constexpr int kMaxCountryRules = 10;
+    static constexpr int kMaxDomainRegexRules = 100;
 
     SplitTunneling() = default;
 
@@ -346,12 +400,16 @@ struct SplitTunneling
     SplitTunnelingSettings settings;
     QVector<SplitTunnelingApp> apps;
     QVector<SplitTunnelingNetworkRoute> networkRoutes;
+    // Path to a user-provided GeoIP database file (DB-IP LITE / GeoLite2 CSV). Linux only; empty
+    // disables country rules. Read by the helper, which parses and caches the contents.
+    QString geoipDatabasePath;
 
     bool operator==(const SplitTunneling &other) const
     {
         return other.settings == settings &&
                other.apps == apps &&
-               other.networkRoutes == networkRoutes;
+               other.networkRoutes == networkRoutes &&
+               other.geoipDatabasePath == geoipDatabasePath;
     }
 
     bool operator!=(const SplitTunneling &other) const
@@ -370,6 +428,18 @@ struct SplitTunneling
         const QStringList appsList = s.value(kIniSplitTunnelingAppsProp).toStringList();
         for (auto appPath : appsList) {
             if (appPath.isEmpty()) {
+                continue;
+            }
+            if (appPath.startsWith(kIniRegexPrefix)) {
+                // Regex app entry: fullName is the pattern, never a file path.
+                SplitTunnelingApp a;
+                a.active = true;
+                a.isRegex = true;
+                a.fullName = appPath.mid(kIniRegexPrefix.length());
+                a.name = a.fullName;
+                a.icon = "";
+                a.type = SPLIT_TUNNELING_APP_TYPE_USER;
+                apps << a;
                 continue;
             }
 #ifdef Q_OS_LINUX
@@ -402,14 +472,23 @@ struct SplitTunneling
                 continue;
             }
             SplitTunnelingNetworkRoute r;
-            r.name = route;
-            if (NetworkingValidation::isIpCidr(route)) {
+            if (route.startsWith(kIniCountryPrefix)) {
+                r.type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY;
+                r.name = route.mid(kIniCountryPrefix.length()).toLower();
+            } else if (route.startsWith(kIniRegexPrefix)) {
+                r.type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX;
+                r.name = route.mid(kIniRegexPrefix.length());
+            } else if (NetworkingValidation::isIpCidr(route)) {
                 r.type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_IP;
+                r.name = route;
             } else {
                 r.type = SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_HOSTNAME;
+                r.name = route;
             }
             networkRoutes << r;
         }
+
+        geoipDatabasePath = s.value(kIniSplitTunnelingGeoIpDatabaseProp, geoipDatabasePath).toString();
     }
 
     void toIni(QSettings &s) const
@@ -420,7 +499,7 @@ struct SplitTunneling
         QStringList appsList;
         for (auto app : apps) {
             if (app.active) {
-                appsList << app.fullName;
+                appsList << (app.isRegex ? (kIniRegexPrefix + app.fullName) : app.fullName);
             }
         }
         if (appsList.isEmpty()) {
@@ -432,7 +511,13 @@ struct SplitTunneling
         QStringList routesList;
         for (auto route : networkRoutes) {
             if (route.active) {
-                routesList << route.name;
+                if (route.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY) {
+                    routesList << kIniCountryPrefix + route.name;
+                } else if (route.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
+                    routesList << kIniRegexPrefix + route.name;
+                } else {
+                    routesList << route.name;
+                }
             }
         }
         if (routesList.isEmpty()) {
@@ -440,6 +525,8 @@ struct SplitTunneling
         } else {
             s.setValue(kIniSplitTunnelingRoutesProp, routesList);
         }
+
+        s.setValue(kIniSplitTunnelingGeoIpDatabaseProp, geoipDatabasePath);
     }
 #endif
 
@@ -460,13 +547,15 @@ struct SplitTunneling
         }
         json[kJsonNetworkRoutesProp] = networkRoutesArray;
 
+        json[kJsonGeoIpDatabasePathProp] = geoipDatabasePath;
+
         return json;
     }
 
     friend QDataStream& operator <<(QDataStream &stream, const SplitTunneling &o)
     {
         stream << versionForSerialization_;
-        stream << o.settings << o.apps << o.networkRoutes;
+        stream << o.settings << o.apps << o.networkRoutes << o.geoipDatabasePath;
         return stream;
     }
 
@@ -479,6 +568,9 @@ struct SplitTunneling
             return stream;
         }
         stream >> o.settings >> o.apps >> o.networkRoutes;
+        if (version >= 2) {
+            stream >> o.geoipDatabasePath;
+        }
         return stream;
     }
 
@@ -497,6 +589,10 @@ struct SplitTunneling
             }
             if (app.fullName.size() > kMaxStringLen || app.name.size() > kMaxStringLen ||
                 app.fullName.contains(QChar(0)) || app.name.contains(QChar(0))) {
+                droppedInvalidApps++;
+                continue;
+            }
+            if (app.isRegex && app.fullName.size() > SplitTunnelingNetworkRoute::kMaxRegexLen) {
                 droppedInvalidApps++;
                 continue;
             }
@@ -522,12 +618,16 @@ struct SplitTunneling
         apps = filteredApps;
 
         QVector<SplitTunnelingNetworkRoute> filteredRoutes;
-        const int maxRoutes = kMaxHostnames + kMaxIpRoutes;
+        const int maxRoutes = kMaxHostnames + kMaxIpRoutes + kMaxCountryRules + kMaxDomainRegexRules;
         filteredRoutes.reserve(networkRoutes.size() < maxRoutes ? networkRoutes.size() : maxRoutes);
         int numHostnames = 0;
         int numIpRoutes = 0;
+        int numCountries = 0;
+        int numDomainRegexes = 0;
         int droppedHostnamesOverCap = 0;
         int droppedIpRoutesOverCap = 0;
+        int droppedCountriesOverCap = 0;
+        int droppedDomainRegexesOverCap = 0;
         int droppedInvalidRoutes = 0;
         for (SplitTunnelingNetworkRoute &r : networkRoutes) {
             if (!r.isValidName()) {
@@ -535,7 +635,19 @@ struct SplitTunneling
                 continue;
             }
 
-            if (NetworkingValidation::isDomain(r.name)) {
+            if (r.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_COUNTRY) {
+                if (numCountries >= kMaxCountryRules) {
+                    droppedCountriesOverCap++;
+                    continue;
+                }
+                numCountries++;
+            } else if (r.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
+                if (numDomainRegexes >= kMaxDomainRegexRules) {
+                    droppedDomainRegexesOverCap++;
+                    continue;
+                }
+                numDomainRegexes++;
+            } else if (NetworkingValidation::isDomain(r.name)) {
                 if (numHostnames >= kMaxHostnames) {
                     droppedHostnamesOverCap++;
                     continue;
@@ -561,6 +673,12 @@ struct SplitTunneling
         if (droppedIpRoutesOverCap > 0) {
             qCWarning(LOG_BASIC) << "SplitTunneling: IP routes over cap, dropped" << droppedIpRoutesOverCap << "routes";
         }
+        if (droppedCountriesOverCap > 0) {
+            qCWarning(LOG_BASIC) << "SplitTunneling: countries over cap, dropped" << droppedCountriesOverCap << "routes";
+        }
+        if (droppedDomainRegexesOverCap > 0) {
+            qCWarning(LOG_BASIC) << "SplitTunneling: domain regexes over cap, dropped" << droppedDomainRegexesOverCap << "routes";
+        }
         networkRoutes = filteredRoutes;
     }
 
@@ -569,13 +687,18 @@ private:
     static const inline QString kIniSplitTunnelingRoutesProp = "SplitTunnelingRoutes";
     static const inline QString kIniSplitTunnelingEnabledProp = "SplitTunnelingEnabled";
     static const inline QString kIniSplitTunnelingModeProp = "SplitTunnelingMode";
+    static const inline QString kIniSplitTunnelingGeoIpDatabaseProp = "SplitTunnelingGeoIpDatabase";
+    // INI prefixes distinguishing the new rule kinds inside the flat routes string list.
+    static const inline QString kIniCountryPrefix = "country:";
+    static const inline QString kIniRegexPrefix = "re:";
 
     static const inline QString kJsonAppsProp = "apps";
     static const inline QString kJsonNetworkRoutesProp = "networkRoutes";
     static const inline QString kJsonSettingsProp = "settings";
     static const inline QString kJsonVersionProp = "version";
+    static const inline QString kJsonGeoIpDatabasePathProp = "geoipDatabasePath";
 
-    static constexpr quint32 versionForSerialization_ = 1;  // should increment the version if the data format is changed
+    static constexpr quint32 versionForSerialization_ = 2;  // should increment the version if the data format is changed
 };
 
 

@@ -137,6 +137,16 @@ bool NetworkingValidation::isDomainWithWildcard(const QString &str)
     return domainRegex.match(str).hasMatch();
 }
 
+// ISO 3166-1 alpha-2 country code: exactly two ASCII letters. Used for split-tunneling country
+// rules; callers normalize with toLower() before persisting.
+bool NetworkingValidation::isCountryCode(const QString &str)
+{
+    if (str.size() != 2) {
+        return false;
+    }
+    return str[0].isAscii() && str[0].isLetter() && str[1].isAscii() && str[1].isLetter();
+}
+
 bool NetworkingValidation::isIpOrDomain(const QString &str)
 {
     return (isIp(str) || isDomain(str));
