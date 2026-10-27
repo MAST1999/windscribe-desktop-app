@@ -4,7 +4,7 @@
 #include "preferenceswindow/preferencegroup.h"
 #include "preferenceswindow/comboboxitem.h"
 #include "preferenceswindow/editboxitem.h"
-#include "splittunnelingwindow/addressitem.h"
+#include "addressitem.h"
 
 namespace PreferencesWindow {
 
