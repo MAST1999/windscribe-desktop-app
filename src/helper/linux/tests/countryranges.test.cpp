@@ -142,6 +142,7 @@ int main()
                      "1.0.4.0,1.0.7.255,AU\n"          // not adjacent to the CN block
                      "2a01:5c0::,2a01:5c0:ffff:ffff:ffff:ffff:ffff:ffff,DE\n"
                      "9.9.9.9,9.9.9.9,US\n"
+                     "::ffff:8.8.8.0,::ffff:8.8.8.255,GB\n"   // v4-mapped v6: must land in the v4 index
                      "invalid,row,XX\n"                // skipped, not fatal
                      "5.5.5.5,5.5.5.5,\n"              // no country: skipped
                      ));
@@ -162,6 +163,15 @@ int main()
 
         const auto de = loader.ranges6("de");
         VERIFY(de.size() == 1 && de[0].from[0] == 0x2A && de[0].to[2] == 0x05);
+
+        // v4-mapped v6 rows classify v4 traffic.
+        const auto gb = loader.ranges4("gb");
+        VERIFY(gb.size() == 1 && touches(gb, 0x08080800u) && touches(gb, 0x080808FFu));
+
+        // Malformed CIDR prefix (garbage, not digits) must be rejected, not parsed as /0.
+        VERIFY(!CountryRangesLoader::parseCidr4("1.2.3.0/", r4));
+        VERIFY(!CountryRangesLoader::parseCidr4("1.2.3.0/2x", r4));
+        VERIFY(!CountryRangesLoader::parseCidr6("2001:db8::/x", r6));
 
         // union merging and unknown-country tolerance: AU and CN blocks are adjacent at the byte
         // boundary, so the union must collapse into ONE contiguous range (cross-country merge is

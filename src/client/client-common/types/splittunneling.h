@@ -397,6 +397,10 @@ struct SplitTunneling
                 }
             }
         }
+
+        if (json.contains(kJsonGeoIpDatabasePathProp) && json[kJsonGeoIpDatabasePathProp].isString()) {
+            geoipDatabasePath = json[kJsonGeoIpDatabasePathProp].toString();
+        }
     }
 
     SplitTunnelingSettings settings;

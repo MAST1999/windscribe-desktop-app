@@ -445,5 +445,7 @@ custom triplets, **buildSplitTunnelRules golden test** (only the nft:: builders 
 **helper→client parse-feedback channel** (§5.5.2), **9-param tuple → params struct** (§Data Clumps),
 **dyn-domain set expiry** (§5.4-A "timeouts": entries currently persist until reconnect/settings
 change; cap 4096 + dedupe + debounced apply implemented; eviction is oldest-first), **domain regex
-over IPv6 transport** (v1 resolver forwards via the first v4 tunnel DNS; v6 upstream is used only
-as redirect exclusion; v6-only-DNS setups keep the feature inert).
+over IPv6**: v1 intercepts IPv4 udp/53 only — the resolver listens on an AF_INET socket, so IPv6
+DNS is deliberately NOT redirected (it flows normally through the tunnel, unclassified); a v6
+listener is the follow-up. CLI-only note: RE2 pre-validation lives in the GUI; CLI-entered patterns
+are validated by the helper (invalid ones are logged and dropped).

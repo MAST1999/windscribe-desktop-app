@@ -21,9 +21,13 @@ SplitTunnelingAddressesGroup::SplitTunnelingAddressesGroup(ScalableGraphicsObjec
 
 void SplitTunnelingAddressesGroup::setAddresses(QList<types::SplitTunnelingNetworkRoute> addresses)
 {
-    if (addresses == addresses_.values() && passthrough_.isEmpty()) {
+    // Guard on the FULL list (managed + passthrough): with country/regex entries present the
+    // managed subset alone changes constantly between round-trips, and rebuilding here would
+    // visibly re-animate every row on each preferences change.
+    if (addresses == lastSeen_) {
         return;
     }
+    lastSeen_ = addresses;
     for (AddressItem *item : addresses_.keys()) {
         addresses_.remove(item);
         hideItems(indexOf(item), -1, DISPLAY_FLAGS::FLAG_DELETE_AFTER);

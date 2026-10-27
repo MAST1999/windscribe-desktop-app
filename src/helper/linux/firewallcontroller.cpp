@@ -423,15 +423,14 @@ std::string FirewallController::buildSplitTunnelRules()
                 // masqueraded) and therefore the redirect below EXCLUDES the cgroup. Without the
                 // exclusion a marked, redirected query would route 127.0.0.1 out the physical NIC
                 // (martian, dropped) and break excluded apps' DNS.
+                //
+                // IPv4 only (documented v1 limitation): the resolver listens on an AF_INET socket,
+                // so a redirected IPv6 query would land on [::1]:15353 unanswered and blackhole
+                // IPv6 DNS. Unredirected v6 DNS flows normally through the tunnel — unclassified.
                 add("st_route_out", "udp dport 53 return");
                 if (!domainRegexUpstreamV4_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV4_)) {
                     add("st_dns_out", "meta cgroup != " + classid + " udp dport 53 ip daddr != " +
                                           domainRegexUpstreamV4_ + " redirect to :" +
-                                          std::to_string(DomainRegexResolver::kListenPort));
-                }
-                if (!domainRegexUpstreamV6_.empty() && Validation::isValidIpAddress(domainRegexUpstreamV6_)) {
-                    add("st_dns_out", "meta cgroup != " + classid + " udp dport 53 ip6 daddr != " +
-                                          domainRegexUpstreamV6_ + " redirect to :" +
                                           std::to_string(DomainRegexResolver::kListenPort));
                 }
             }

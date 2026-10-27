@@ -97,7 +97,16 @@ void DomainRegexResolver::enable()
         running_ = false;
         return;
     }
-    thread_ = std::thread(&DomainRegexResolver::worker, this);
+    try {
+        thread_ = std::thread(&DomainRegexResolver::worker, this);
+    } catch (const std::system_error &e) {
+        // Thread creation failed: roll the flag back so a later enable() can retry, and leave the
+        // (bound) query socket closed rather than half-armed.
+        running_ = false;
+        closeSockets();
+        spdlog::error("DomainRegexResolver: failed to start worker thread: {}", e.what());
+        return;
+    }
     spdlog::info("DomainRegexResolver: listening on {}:{}", kListenAddress, kListenPort);
 }
 

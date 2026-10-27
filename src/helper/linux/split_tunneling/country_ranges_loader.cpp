@@ -17,6 +17,26 @@ namespace
 constexpr char kGeoLite2LocationsPrefix[] = "GeoLite2-Country-Locations-";
 constexpr char kGeoLite2BlocksV6Name[] = "GeoLite2-Country-Blocks-IPv6.csv";
 
+// Strict decimal prefix parse: every char after '/' must be a digit. atoi("x") == 0 would turn a
+// corrupt row like "1.2.3.0/,AU" into 0.0.0.0/0 — the entire address space for one country.
+bool parsePrefixAfterSlash(const std::string &s, int &out)
+{
+    const size_t slash = s.find('/');
+    if (slash == std::string::npos || slash + 1 >= s.size()) {
+        return false;
+    }
+    int value = 0;
+    for (size_t i = slash + 1; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c < '0' || c > '9') {
+            return false;
+        }
+        value = value * 10 + (c - '0');
+    }
+    out = value;
+    return true;
+}
+
 bool statFile(const std::string &path, long long &size, long long &mtime)
 {
     struct stat st = {};
@@ -125,7 +145,9 @@ const std::string *geoLite2CountryGeoname(const std::vector<std::string> &fields
 // fgets into a scratch buffer, then copy out: `std::string::resize()` on a short string
 // value-initializes the grown bytes to '\0', which would clobber what fgets just wrote if we
 // resized-and-read through the string's own buffer. The scratch buffer avoids that class of bug
-// entirely and makes the NUL sniff meaningful (a NUL in the middle of a line means binary data).
+// entirely and makes the NUL sniff meaningful (a NUL as the first byte of a line means binary
+// data; a NUL mid-line truncates the row via strlen, which the row parsers then skip as
+// malformed — acceptable for a text format).
 class LineReader
 {
 public:
@@ -154,6 +176,24 @@ private:
     std::vector<char> buf_;
     size_t lastRawLen_ = 1;
 };
+
+// A v4-mapped v6 range (::ffff:a.b.c.d[124]) is really IPv4 traffic; real GeoIP files carry CDN
+// ranges in that form and routing only ever sees them as plain v4. Returns false for anything
+// that is not a mapped range.
+bool unmapV4Range(const uint8_t from[16], const uint8_t to[16], CountryRangesLoader::Range4 &out)
+{
+    for (int i = 0; i < 10; ++i) {
+        if (from[i] != 0 || to[i] != 0) {
+            return false;
+        }
+    }
+    if (from[10] != 0xFF || from[11] != 0xFF || to[10] != 0xFF || to[11] != 0xFF) {
+        return false;
+    }
+    out.from = (uint32_t(from[12]) << 24) | (uint32_t(from[13]) << 16) | (uint32_t(from[14]) << 8) | from[15];
+    out.to = (uint32_t(to[12]) << 24) | (uint32_t(to[13]) << 16) | (uint32_t(to[14]) << 8) | to[15];
+    return true;
+}
 
 } // namespace
 
@@ -187,8 +227,8 @@ bool CountryRangesLoader::parseCidr4(const std::string &s, Range4 &out)
     if (!parseIp4(s.substr(0, slash), base)) {
         return false;
     }
-    int prefix = std::atoi(s.c_str() + slash + 1);
-    if (prefix < 0 || prefix > 32) {
+    int prefix = 0;
+    if (!parsePrefixAfterSlash(s, prefix) || prefix > 32) {
         return false;
     }
     if (prefix == 0) {
@@ -211,8 +251,8 @@ bool CountryRangesLoader::parseCidr6(const std::string &s, Range6 &out)
     if (!parseIp6(s.substr(0, slash), out.from)) {
         return false;
     }
-    int prefix = std::atoi(s.c_str() + slash + 1);
-    if (prefix < 0 || prefix > 128) {
+    int prefix = 0;
+    if (!parsePrefixAfterSlash(s, prefix) || prefix > 128) {
         return false;
     }
     std::memcpy(out.to, out.from, 16);
@@ -401,8 +441,11 @@ bool CountryRangesLoader::parseGeoLite2Set(const std::string &blocksPath, Index 
                 return false;
             }
             splitCsvLine(line, fields);
-            // Column layout differs between GeoLite2 releases; find the geoname columns by header
-            // position, falling back to the documented default layout.
+            // Column layout: the documented GeoLite2-Country Blocks layout is
+            // network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,...
+            // Preference: registered (2), then plain (1), then represented (3). Headers are NOT
+            // parsed for positions; a future column reorder upstream would need this updated
+            // (covered loosely by the fixture in tests/countryranges.test.cpp).
             static const std::vector<size_t> kDefaultGeonameOrder = { 2, 1, 3 };
             const std::string *geoname = geoLite2CountryGeoname(fields, kDefaultGeonameOrder);
             if (!geoname) {
@@ -422,7 +465,12 @@ bool CountryRangesLoader::parseGeoLite2Set(const std::string &blocksPath, Index 
                 if (!parseCidr6(fields[0], r6)) {
                     continue;
                 }
-                index.byCountry6[cc].push_back(r6);
+                Range4 mapped;
+                if (unmapV4Range(r6.from, r6.to, mapped)) {
+                    index.byCountry4[cc].push_back(mapped);
+                } else {
+                    index.byCountry6[cc].push_back(r6);
+                }
             } else {
                 Range4 r4;
                 if (!parseCidr4(fields[0], r4)) {
@@ -485,7 +533,12 @@ bool CountryRangesLoader::parseDbIpFile(const std::string &path, Index &index, s
         std::transform(cc.begin(), cc.end(), cc.begin(),
                        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if (isV6) {
-            index.byCountry6[cc].push_back(r6);
+            Range4 mapped;
+            if (unmapV4Range(r6.from, r6.to, mapped)) {
+                index.byCountry4[cc].push_back(mapped);
+            } else {
+                index.byCountry6[cc].push_back(r6);
+            }
         } else {
             index.byCountry4[cc].push_back(r4);
         }

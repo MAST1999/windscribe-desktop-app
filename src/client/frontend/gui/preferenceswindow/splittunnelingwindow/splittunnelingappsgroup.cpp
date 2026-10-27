@@ -130,6 +130,12 @@ void SplitTunnelingAppsGroup::onRegexEdited(QString text)
         emit setError(tr("That regular expression is too long. Please use at most 512 characters."));
         return;
     }
+    if (!NetworkingValidation::isPrintableSingleLineAscii(pattern)) {
+        // Mirror the helper's isSaneRegexPattern so a rule the helper would silently drop never
+        // reaches the list.
+        emit setError(tr("Regular expressions must use printable ASCII characters only."));
+        return;
+    }
     for (const types::SplitTunnelingApp &app : apps_) {
         if (app.isRegex && app.fullName == pattern) {
             emit setError(tr("That regular expression already exists. Please enter a new one."));
