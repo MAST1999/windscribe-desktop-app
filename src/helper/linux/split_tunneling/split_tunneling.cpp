@@ -4,11 +4,34 @@
 #include <atomic>
 #include <thread>
 #include <spdlog/spdlog.h>
+#include <sys/stat.h>
+
 #include "../firewallcontroller.h"
 #include "../utils.h"
 #include "country_ranges_loader.h"
 #include "domain_regex_resolver.h"
 #include "types/ipaddress.h"
+
+namespace
+{
+
+// Cache-breaker for the GeoIP parse worker: path|size|mtime. A parse failure leaves this stamp
+// unchanged on disk, which is exactly what lets the worker's failure backoff detect "same failed
+// file" versus "file changed, try again".
+std::string fileStamp(const std::string &path, long long &size, long long &mtime)
+{
+    struct stat st = {};
+    if (path.empty() || ::stat(path.c_str(), &st) != 0) {
+        size = -1;
+        mtime = -1;
+        return path + "|missing";
+    }
+    size = st.st_size;
+    mtime = static_cast<long long>(st.st_mtim.tv_sec);
+    return path + "|" + std::to_string(size) + "|" + std::to_string(mtime);
+}
+
+} // namespace
 
 SplitTunneling::SplitTunneling(): isSplitTunnelActive_(false), isExclude_(false), isAllowLanTraffic_(false)
 {
@@ -91,8 +114,11 @@ void SplitTunneling::updateDomainRegexState()
             upstreamV6 = dns.toString();
         }
     }
-    if (upstreamV4.empty() && upstreamV6.empty()) {
-        wantActive = false;   // nowhere to forward: keep the feature inert rather than blackhole DNS
+    if (upstreamV4.empty()) {
+        // The v1 resolver forwards over IPv4 only. With no v4 tunnel DNS (rare v6-only setups)
+        // the feature must stay INERT: the redirect would bounce system DNS to a port nobody
+        // answers. (Normal DNS flow is untouched when inert.)
+        wantActive = false;
     }
     resolver.setUpstreams(upstreamV4.empty() ? std::vector<std::string>{} : std::vector<std::string>{upstreamV4});
 
@@ -110,21 +136,33 @@ void SplitTunneling::updateDomainRegexState()
 
 void SplitTunneling::geoipParseWorker()
 {
+    // Stamp (path|size|mtime) of the last parse FAILURE. A failing file stays "not up to date"
+    // forever (the loader keeps its previous index), so without this the release/re-check loop
+    // below would re-parse it in a hot spin. The worker treats the failed stamp as current until
+    // the file actually changes (next V2 command or a different size/mtime).
+    std::string lastFailedStamp;
+
     for (;;) {
         std::string path;
+        long long size = 0, mtime = 0;
         {
             std::lock_guard<std::mutex> guard(mutex_);
             path = geoipPath_;
         }
-        if (!path.empty() && !CountryRangesLoader::instance().isUpToDate(path)) {
+        const std::string stamp = fileStamp(path, size, mtime);
+        const bool failedBefore = (stamp == lastFailedStamp);
+        if (!path.empty() && !failedBefore && !CountryRangesLoader::instance().isUpToDate(path)) {
             std::string err;
             if (!CountryRangesLoader::instance().ensureLoaded(path, &err)) {
                 // The loader keeps its previous index on failure; re-apply anyway so the firewall
-                // reflects a consistent (possibly stale/empty) country selection. A changed or
-                // fixed file arrives via the next V2 command or (size, mtime) change.
+                // reflects a consistent (possibly stale/empty) country selection. The failed stamp
+                // above stops the loop from spinning; a changed or fixed file arrives via the next
+                // V2 command or (size, mtime) change.
                 spdlog::warn("SplitTunneling: GeoIP database unusable ({}), country rules off until the file changes", err);
                 FirewallController::instance().applySplitTunnel();
+                lastFailedStamp = stamp;
             } else {
+                lastFailedStamp.clear();
                 spdlog::info("SplitTunneling: GeoIP database loaded, re-applying country rules");
                 FirewallController::instance().applySplitTunnel();
             }
@@ -133,11 +171,15 @@ void SplitTunneling::geoipParseWorker()
         // Release the busy flag, then RE-CHECK under the lock: a V2 command that arrived while we
         // were marked busy failed its compare-exchange (the spawn slot was taken) and relies on us
         // noticing its path here. Redundant workers are harmless — ensureLoaded() is idempotent
-        // and mutex-protected — so a spawn that slips into the release window is fine.
+        // and mutex-protected — so a spawn that slips into the release window is fine. A file that
+        // just failed keeps the worker asleep (stamp check above), not spinning.
         geoipParseBusy_ = false;
         std::lock_guard<std::mutex> guard(mutex_);
         const std::string fresh = geoipPath_;
-        if (fresh.empty() || CountryRangesLoader::instance().isUpToDate(fresh)) {
+        long long freshSize = 0, freshMtime = 0;
+        const std::string freshStamp = fileStamp(fresh, freshSize, freshMtime);
+        if (fresh.empty() || freshStamp == lastFailedStamp ||
+            CountryRangesLoader::instance().isUpToDate(fresh)) {
             return;
         }
         geoipParseBusy_ = true;   // keep the slot and loop for the newly changed file

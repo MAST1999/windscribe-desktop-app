@@ -649,9 +649,9 @@ struct SplitTunneling
                 numCountries++;
             } else if (r.type == SPLIT_TUNNELING_NETWORK_ROUTE_TYPE_DOMAIN_REGEX) {
                 // Combined cap with process regexes: the two kinds share the classifier budget
-                // (spec §5.1 kMaxRegexRules).
-                if (numDomainRegexes >= kMaxDomainRegexRules ||
-                    numDomainRegexes + numRegexApps >= kMaxRegexRules) {
+                // (spec §5.1 kMaxRegexRules). kMaxDomainRegexRules (the same value) exists for the
+                // single-kind case; the combined check subsumes it.
+                if (numDomainRegexes + numRegexApps >= kMaxRegexRules) {
                     droppedDomainRegexesOverCap++;
                     continue;
                 }

@@ -441,4 +441,9 @@ regex match policy, wine path matching) is compiled with `-Wall -Wextra` and its
 
 Remaining follow-ups: perf script (toggle timing with 1/3/10 countries), kill-switch-on manual pass,
 GUI flag icons on country rows, Windows WFP/macOS NE adoption, re2 vendoring review for the vcpkg
-custom triplets.
+custom triplets, **buildSplitTunnelRules golden test** (only the nft:: builders are golden-tested),
+**helper→client parse-feedback channel** (§5.5.2), **9-param tuple → params struct** (§Data Clumps),
+**dyn-domain set expiry** (§5.4-A "timeouts": entries currently persist until reconnect/settings
+change; cap 4096 + dedupe + debounced apply implemented; eviction is oldest-first), **domain regex
+over IPv6 transport** (v1 resolver forwards via the first v4 tunnel DNS; v6 upstream is used only
+as redirect exclusion; v6-only-DNS setups keep the feature inert).

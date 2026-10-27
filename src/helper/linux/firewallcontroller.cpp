@@ -346,17 +346,28 @@ std::string FirewallController::buildSplitTunnelRules()
 
     const bool stActive = connected_ && splitTunnelEnabled_;
     // Destination-bypass sets (countries, domain-regex matches) exist only while ST is active —
-    // hard requirement: everything is created/destroyed with the ST lifecycle. When inactive they
-    // are torn down (add-then-delete keeps it idempotent); rule text never references them outside
-    // the active branch.
+    // hard requirement: everything is created/destroyed with the ST lifecycle. When inactive, the
+    // set-referencing base chains are FLUSHED FIRST (create-if-absent+flush is idempotent and
+    // clears the rules that reference the sets) — the kernel refuses to delete a referenced set
+    // (EBUSY), and stale rules from a previous active build would otherwise fail the whole
+    // transaction, breaking the ST-off apply.
     const char *kSetSpecs[][2] = {
         { "ws_countries", "type ipv4_addr; flags interval;" },
         { "ws_countries6", "type ipv6_addr; flags interval;" },
         { "ws_dyn_domains", "type ipv4_addr; flags interval;" },
         { "ws_dyn_domains6", "type ipv6_addr; flags interval;" },
     };
-    for (const auto &set : kSetSpecs) {
-        buf += stActive ? nft::ensureSet(set[0], set[1]) : nft::deleteSet(set[0], set[1]);
+    if (stActive) {
+        for (const auto &set : kSetSpecs) {
+            buf += nft::ensureSet(set[0], set[1]);
+        }
+    } else {
+        buf += nft::ensureChain("st_route_out", "type route hook output priority -150;");
+        buf += nft::ensureChain("st_nat_post", "type nat hook postrouting priority 100;");
+        buf += nft::ensureChain("st_dns_out", "type nat hook output priority -100;");
+        for (const auto &set : kSetSpecs) {
+            buf += nft::deleteSet(set[0], set[1]);
+        }
     }
 
     if (connected_ && splitTunnelEnabled_) {
@@ -606,24 +617,32 @@ void FirewallController::addDynamicDomainIps(const std::vector<types::IpAddressR
     if (!domainRegexActive_) {
         return;
     }
-    // Bound the accumulation: the set exists to bypass destinations a user's matched domains
-    // actually resolve to, not to mirror the whole internet.
+    // Bound the accumulation and keep entries unique: duplicate elements inside one nft add-element
+    // statement can fail the whole transaction (country rules included), and repeated answers for
+    // the same domain are the norm, not the exception.
     static constexpr size_t kMaxDynamicDomainIps = 4096;
-    size_t dropped = 0;
     for (const auto &range : ips) {
         if (domainRegexDynIps_.size() >= kMaxDynamicDomainIps) {
-            dropped++;
+            // Evict oldest: a matched domain that keeps resolving keeps re-adding itself on its
+            // next DNS answer; the oldest entries are the coldest.
+            domainRegexDynIps_.erase(domainRegexDynIps_.begin());
+        }
+        const std::string key = range.address().toString() + "/" + std::to_string(range.prefixLength());
+        const bool duplicate = std::any_of(domainRegexDynIps_.begin(), domainRegexDynIps_.end(),
+                                           [&key](const types::IpAddressRange &r) {
+                                               return r.address().toString() + "/" +
+                                                          std::to_string(r.prefixLength()) == key;
+                                           });
+        if (duplicate) {
             continue;
         }
         domainRegexDynIps_.push_back(range);
     }
-    if (dropped > 0) {
-        spdlog::warn("FirewallController: dynamic domain IP cap reached, dropped {} address(es)", dropped);
-    }
 
     // Debounce: DNS answers arrive in bursts (a page load resolves dozens of names); one apply
     // after the quiet period covers them all. The detached thread always applies everything
-    // accumulated by the time it fires, so no range can be stranded unapplied.
+    // accumulated by the time it fires, so no range can be stranded unapplied. (Detached on
+    // purpose: the controller is a static singleton, alive for the whole helper process.)
     if (dynApplyPending_) {
         return;
     }
