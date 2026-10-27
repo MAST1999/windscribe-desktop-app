@@ -51,6 +51,9 @@ private:
 
     NewAddressItem *newAddressItem_;
     QMap<AddressItem *, types::SplitTunnelingNetworkRoute> addresses_;
+    // Routes managed by other groups (country / domain-regex entries); preserved verbatim so this
+    // group's whole-list write-backs never delete them.
+    QList<types::SplitTunnelingNetworkRoute> passthrough_;
     int numDomains_;
     int numIpRoutes_;
 };

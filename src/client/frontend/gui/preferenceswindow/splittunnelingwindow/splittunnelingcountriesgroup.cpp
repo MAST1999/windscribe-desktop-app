@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QLocale>
+#include <utility>
 #include "utils/networkingvalidation.h"
 
 namespace PreferencesWindow {
@@ -94,7 +95,7 @@ void SplitTunnelingCountriesGroup::onPickerActivated(QVariant value)
     }
     const QString code = value.toString();
 
-    for (const types::SplitTunnelingNetworkRoute &r : qAsConst(items_)) {
+    for (const types::SplitTunnelingNetworkRoute &r : std::as_const(items_)) {
         if (r.name == code) {
             emit setError(tr("That country is already in the list."));
             return;
