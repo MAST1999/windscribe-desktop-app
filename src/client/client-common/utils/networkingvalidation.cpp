@@ -144,7 +144,12 @@ bool NetworkingValidation::isCountryCode(const QString &str)
     if (str.size() != 2) {
         return false;
     }
-    return str[0].isAscii() && str[0].isLetter() && str[1].isAscii() && str[1].isLetter();
+    // QChar::isAscii() is not available in the Qt versions we build against; compare code units.
+    const auto isAsciiLetter = [](QChar c) {
+        const char16_t u = c.unicode();
+        return (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z');
+    };
+    return isAsciiLetter(str[0]) && isAsciiLetter(str[1]);
 }
 
 bool NetworkingValidation::isIpOrDomain(const QString &str)
