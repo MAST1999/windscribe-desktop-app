@@ -61,6 +61,13 @@ SplitTunnelingAppsGroup::SplitTunnelingAppsGroup(ScalableGraphicsObject *parent,
     addItem(searchLineEditItem_);
 
     hideItems(indexOf(searchLineEditItem_), -1, DISPLAY_FLAGS::FLAG_NO_ANIMATION);
+
+    // Regex app rules: the pattern is committed via the edit box's confirm button (textChanged
+    // fires there, not per keystroke). Structural validation only — the authoritative RE2 compile
+    // happens in the helper, which logs and drops uncompilable patterns.
+    regexEntry_ = new EditBoxItem(this, tr("Add regex rule"), tr("Regular expression matched against app paths, e.g. ^/usr/lib/steam/.*"));
+    connect(regexEntry_, &EditBoxItem::textChanged, this, &SplitTunnelingAppsGroup::onRegexEdited);
+    addItem(regexEntry_);
 }
 
 SplitTunnelingAppsGroup::~SplitTunnelingAppsGroup()
@@ -83,7 +90,9 @@ void SplitTunnelingAppsGroup::setApps(QList<types::SplitTunnelingApp> apps)
     QStringList paths;
     for (types::SplitTunnelingApp app : apps) {
         if (addAppInternal(app)) {
-            paths << app.fullName;
+            if (!app.isRegex) {
+                paths << app.fullName;
+            }
         }
     }
     setBatchMode(false);
@@ -101,8 +110,41 @@ void SplitTunnelingAppsGroup::addApp(types::SplitTunnelingApp &app)
         emit setError(tr("This app is already in the list."));
         return;
     }
+    if(addAppInternal(app)) {
+        if (!app.isRegex) {
+            requestIcons({app.fullName});
+        }
+        emit appsUpdated(apps_.values());
+    }
+}
+
+void SplitTunnelingAppsGroup::onRegexEdited(QString text)
+{
+    const QString pattern = text.trimmed();
+    if (pattern.isEmpty()) {
+        emit clearError();
+        return;
+    }
+    if (pattern.size() > types::SplitTunnelingNetworkRoute::kMaxRegexLen || pattern.contains(QChar(0))) {
+        emit setError(tr("That regular expression is too long. Please use at most 512 characters."));
+        return;
+    }
+    for (const types::SplitTunnelingApp &app : apps_) {
+        if (app.isRegex && app.fullName == pattern) {
+            emit setError(tr("That regular expression already exists. Please enter a new one."));
+            return;
+        }
+    }
+
+    types::SplitTunnelingApp app;
+    app.active = true;
+    app.isRegex = true;
+    app.fullName = pattern;
+    app.name = pattern;
+    app.type = SPLIT_TUNNELING_APP_TYPE_USER;
     if (addAppInternal(app)) {
-        requestIcons({app.fullName});
+        // Clear the entry on success; the row itself shows the pattern.
+        regexEntry_->setText("");
         emit appsUpdated(apps_.values());
     }
 }

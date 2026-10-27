@@ -18,9 +18,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <spdlog/spdlog.h>
+#include <re2/re2.h>
 
 #include "cgroups.h"
 #include "path_matching.h"
+#include "regex_matching.h"
+#include "../common/validation_posix.h"
 #include "../utils.h"
 
 #define SEND_MESSAGE_LEN (NLMSG_LENGTH(sizeof(struct cn_msg) + sizeof(enum proc_cn_mcast_op)))
@@ -248,6 +251,7 @@ ProcessMonitor::~ProcessMonitor()
 void ProcessMonitor::rulesWorker()
 {
     std::vector<std::string> apps;
+    std::vector<std::string> regexes;
     while (true) {
         {
             std::unique_lock<std::mutex> lock(rulesMutex_);
@@ -261,11 +265,15 @@ void ProcessMonitor::rulesWorker()
         {
             std::lock_guard<std::mutex> guard(appsMutex_);
             apps = apps_;
+            regexes = regexApps_;
         }
         std::vector<AppRule> newRules;
-        newRules.reserve(apps.size());
+        newRules.reserve(apps.size() + regexes.size());
         for (const auto &app : apps) {
             newRules.push_back(ruleFor(app));
+        }
+        for (const auto &pattern : regexes) {
+            newRules.push_back(ruleForRegex(pattern));
         }
         {
             std::lock_guard<std::mutex> guard(appsMutex_);
@@ -308,6 +316,30 @@ void ProcessMonitor::setApps(const std::vector<std::string> &apps)
     // those processes, taken before the entry swap so a concurrent worker rebuild cannot
     // drop the entry's rule mid-removal; additions land via the worker's post-swap rescan
     // (ruleFor touches the filesystem and must stay off the IPC command thread).
+    if (isEnabled_) {
+        for (const auto &entry : removed) {
+            removeAppsForEntry(entry, oldRules);
+        }
+    }
+    requestRulesRebuild();
+}
+
+void ProcessMonitor::setRegexApps(const std::vector<std::string> &patterns)
+{
+    // Mirrors setApps: synchronous removals against a pre-swap rules snapshot, async additions
+    // via the worker (compile happens there, off the IPC thread).
+    std::vector<std::string> removed;
+    std::vector<AppRule> oldRules;
+    {
+        std::lock_guard<std::mutex> guard(appsMutex_);
+        oldRules = rules_;
+        for (const auto &old : regexApps_) {
+            if (std::find(patterns.begin(), patterns.end(), old) == patterns.end()) {
+                removed.push_back(old);
+            }
+        }
+        regexApps_ = patterns;
+    }
     if (isEnabled_) {
         for (const auto &entry : removed) {
             removeAppsForEntry(entry, oldRules);
@@ -395,6 +427,29 @@ ProcessMonitor::AppRule ProcessMonitor::ruleFor(const std::string &app)
             rule.scriptInterpreter = std::move(interpreter);
         }
     }
+    return rule;
+}
+
+// Regex entries skip all filesystem preprocessing: the pattern is the rule. Compile here (rules
+// worker thread) so a bad pattern becomes a logged dead rule instead of a per-event failure, and
+// RE2's linear-time guarantee is what makes user-supplied patterns safe to run in a root helper.
+ProcessMonitor::AppRule ProcessMonitor::ruleForRegex(const std::string &pattern)
+{
+    AppRule rule;
+    rule.isRegex = true;
+    rule.raw = pattern;
+    if (!Validation::isSaneRegexPattern(pattern)) {
+        spdlog::warn("process monitor: rejecting invalid regex pattern ({} bytes)", pattern.size());
+        return rule;
+    }
+    RE2::Options options;
+    options.set_log_errors(false);
+    auto compiled = std::make_shared<const RE2>(pattern, options);
+    if (!compiled->ok()) {
+        spdlog::warn("process monitor: regex \"{}\" failed to compile: {}", pattern, compiled->error());
+        return rule;
+    }
+    rule.pattern = std::move(compiled);
     return rule;
 }
 
@@ -541,6 +596,26 @@ bool ProcessMonitor::compareCmd(pid_t pid, const std::vector<AppRule> &rules) {
     bool flatpakIdComputed = false;
 
     for (const AppRule &rule : rules) {
+        // Regex entries: partial-match the pattern against the resolved exe path and (under the
+        // same wine-host gate as the path rules) the raw argv tokens. Checked FIRST so pattern
+        // strings can never be mistaken for path-shaped input by the heuristics below (a pattern
+        // like "game\.exe$" has the flatpak app-ID shape, a pattern containing "/snap/" the snap
+        // shape, etc.).
+        if (rule.isRegex) {
+            if (!rule.pattern) {
+                continue;
+            }
+            const bool wineHost = path_matching::exeLooksLikeWineHost(cmd);
+            if (wineHost && !argvRead) {
+                argv = readArgv(pid);
+                argvRead = true;
+            }
+            if (regex_matching::regexRuleMatches(*rule.pattern, cmd, argv.get(), wineHost)) {
+                return true;
+            }
+            continue;
+        }
+
         if (!cmd.empty() && (cmd == rule.raw || cmd == rule.canonical)) {
             return true;
         }

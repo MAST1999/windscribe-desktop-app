@@ -58,7 +58,9 @@ void SplitTunneling::setSplitTunnelingParamsV2(bool isActive, bool isExclude, bo
         }
     }
 
-    // Base fields follow the unchanged V1 flow (apps/ips/hosts -> monitor/routes/firewall).
+    // Base fields follow the unchanged V1 flow (apps/ips/hosts -> monitor/routes/firewall), plus
+    // the regex process rules for the monitor.
+    ProcessMonitor::instance().setRegexApps(regexProcessRules);
     setSplitTunnelingParams(isActive, isExclude, apps, ips, hosts, isAllowLanTraffic);
 }
 
@@ -123,7 +125,7 @@ void SplitTunneling::setSplitTunnelingParams(bool isActive, bool isExclude, cons
 bool SplitTunneling::updateState()
 {
     if (connectStatus_.isConnected && isSplitTunnelActive_) {
-        if (!apps_.empty()) {
+        if (!apps_.empty() || !regexProcessRules_.empty()) {
             bool ret = CGroups::instance().enable(connectStatus_, isAllowLanTraffic_, isExclude_);
             if (!ret) {
                 return ret;

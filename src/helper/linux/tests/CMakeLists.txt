@@ -2,6 +2,7 @@ if(IS_BUILD_TESTS)
     find_package(Boost CONFIG REQUIRED COMPONENTS serialization)
     find_package(skyr-url CONFIG REQUIRED)
     find_package(spdlog CONFIG REQUIRED)
+    find_package(re2 CONFIG REQUIRED)
 
     # Runs the real Utils::executeCommand against /bin/sh, so utils.cpp is compiled in together with the
     # validation code it calls (the helper has no library form).
@@ -72,6 +73,16 @@ if(IS_BUILD_TESTS)
     )
     set_target_properties(mainroutetable.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
     ws_add_test(mainroutetable)
+
+    # Regex app-rule matching policy (regex_matching.h); needs only std + RE2.
+    add_executable(regexrules.test
+        regexrules.test.cpp
+    )
+    target_link_libraries(regexrules.test PRIVATE
+        re2::re2
+    )
+    set_target_properties(regexrules.test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    ws_add_test(regexrules)
 
     # GeoIP country-range loader tests.  country_ranges_loader.cpp needs only std + spdlog.
     add_executable(countryranges.test

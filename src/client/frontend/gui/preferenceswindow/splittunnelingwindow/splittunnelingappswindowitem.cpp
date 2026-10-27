@@ -18,6 +18,7 @@ SplitTunnelingAppsWindowItem::SplitTunnelingAppsWindowItem(ScalableGraphicsObjec
     splitTunnelingAppsGroup_ = new SplitTunnelingAppsGroup(this);
     connect(splitTunnelingAppsGroup_, &SplitTunnelingAppsGroup::appsUpdated, this, &SplitTunnelingAppsWindowItem::onAppsUpdated);
     connect(splitTunnelingAppsGroup_, &SplitTunnelingAppsGroup::setError, this, &SplitTunnelingAppsWindowItem::onError);
+    connect(splitTunnelingAppsGroup_, &SplitTunnelingAppsGroup::clearError, this, &SplitTunnelingAppsWindowItem::onClearError);
     connect(splitTunnelingAppsGroup_, &SplitTunnelingAppsGroup::addClicked, this, &SplitTunnelingAppsWindowItem::addButtonClicked);
     connect(splitTunnelingAppsGroup_, &SplitTunnelingAppsGroup::escape, this, &SplitTunnelingAppsWindowItem::escape);
     addItem(splitTunnelingAppsGroup_);
@@ -84,6 +85,11 @@ void SplitTunnelingAppsWindowItem::onPreferencesChanged()
 void SplitTunnelingAppsWindowItem::onError(QString msg)
 {
     desc_->setDescription(msg, true);
+}
+
+void SplitTunnelingAppsWindowItem::onClearError()
+{
+    desc_->clearError();
 }
 
 } // namespace PreferencesWindow

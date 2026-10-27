@@ -7,6 +7,7 @@
 
 #include "commongraphics/baseitem.h"
 #include "preferenceswindow/preferencegroup.h"
+#include "preferenceswindow/editboxitem.h"
 #include "types/splittunneling.h"
 #include "appincludeditem.h"
 #include "appsearchitem.h"
@@ -40,6 +41,7 @@ signals:
     void appsUpdated(QList<types::SplitTunnelingApp> apps);
     void escape();
     void setError(QString msg);
+    void clearError();
 
 protected slots:
     void keyPressEvent(QKeyEvent *event) override;
@@ -51,6 +53,7 @@ private slots:
     void onSearchModeExited();
     void onSearchBoxFocusIn();
     void onSearchItemClicked();
+    void onRegexEdited(QString text);
 
 private:
     void onAppsEnumerated(std::shared_ptr<EnumerationResult> result);
@@ -67,6 +70,7 @@ private:
     };
     SplitTunnelingAppsItem *splitTunnelingAppsItem_;
     SearchLineEditItem *searchLineEditItem_;
+    EditBoxItem *regexEntry_;
 
     QMap<AppIncludedItem *, types::SplitTunnelingApp> apps_;
     QMap<AppSearchItem *, types::SplitTunnelingApp> searchApps_;

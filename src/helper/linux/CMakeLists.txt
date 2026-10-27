@@ -5,6 +5,7 @@ find_package(OpenSSL REQUIRED)
 find_package(RapidJSON CONFIG REQUIRED)
 find_package(skyr-url CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
+find_package(re2 CONFIG REQUIRED)
 
 # libnftables (system library): the helper manages the firewall via libnftables instead of shelling
 # out. Discovered with plain CMake find_* (the project intentionally does not use pkg-config). Build
@@ -68,6 +69,7 @@ target_link_libraries(helper
                       skyr::skyr-url
                       spdlog::spdlog
                       rapidjson
+                      re2::re2
                       ${NFTABLES_LIB}
 )
 

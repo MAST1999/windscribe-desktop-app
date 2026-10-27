@@ -34,6 +34,7 @@
         },
         "rapidjson",
         "skyr-url",
+        "re2",
         "cmakerc",
         "cpp-base64",
         "c-ares",
