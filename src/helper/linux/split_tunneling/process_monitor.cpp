@@ -1,8 +1,13 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE   // O_CLOEXEC and friends (matches server.cpp / installer_verifier.cpp)
+#endif
+
 #include "process_monitor.h"
 
 #include <algorithm>
 #include <cstring>
 #include <dirent.h>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
 #include <linux/cn_proc.h>
