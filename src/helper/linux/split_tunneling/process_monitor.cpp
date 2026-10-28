@@ -55,6 +55,43 @@ std::string canonicalizeAppPath(const std::string &path)
     return out;
 }
 
+namespace
+{
+
+// Reads a small file WITHOUT exceptions. Recent libstdc++ throws std::ios_base::failure straight
+// out of basic_filebuf::underflow() when the underlying read() fails — which happens routinely on
+// /proc/<pid> files whose process vanishes between the directory scan and the read (ESRCH/EIO).
+// An uncaught throw on the monitor thread aborts the whole helper (observed as SIGABRT during
+// shutdown: monitorWorker → compareCmd → readArgv → underflow → terminate). POSIX read() reports
+// the same conditions as -1, which we fold into "no data".
+std::optional<std::string> readSmallFileNoThrow(const std::string &path)
+{
+    const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return std::nullopt;
+    }
+    std::string data;
+    char buf[4096];
+    for (;;) {
+        const ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n < 0) {
+            ::close(fd);
+            return std::nullopt;   // read error: treat as vanished/unknown, never as fatal
+        }
+        if (n == 0) {
+            break;
+        }
+        data.append(buf, static_cast<size_t>(n));
+        if (data.size() > 1024 * 1024) {
+            break;   // sanity cap; /proc files we read are tiny
+        }
+    }
+    ::close(fd);
+    return data;
+}
+
+} // namespace
+
 // Tokens of the shebang line ("#!/bin/bash -e" -> {"/bin/bash", "-e"}), or nullopt when the
 // file is not a script. Only ever called on paths already stat-verified as regular files:
 // opening anything else (a FIFO with no writer, for instance) would block the caller
@@ -64,7 +101,11 @@ std::optional<std::vector<std::string>> readShebangTokens(const std::string &pat
     if (path.empty() || path.front() != '/') {
         return std::nullopt;
     }
-    std::ifstream f(path);
+    const auto content = readSmallFileNoThrow(path);
+    if (!content) {
+        return std::nullopt;
+    }
+    std::istringstream f(*content);
     std::string line;
     if (!std::getline(f, line)) {
         return std::nullopt;
@@ -109,11 +150,13 @@ std::string findExecutableInPath(const std::string &name)
 }
 std::optional<std::vector<std::string>> readArgv(pid_t pid)
 {
-    std::ifstream f("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
-    if (!f.is_open()) {
+    // NOTE: must stay exception-free — see readSmallFileNoThrow. An ifstream on /proc/<pid> can
+    // throw ios_base::failure when the process vanishes mid-read on newer libstdc++.
+    const auto content = readSmallFileNoThrow("/proc/" + std::to_string(pid) + "/cmdline");
+    if (!content) {
         return std::nullopt;
     }
-    std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    const std::string &data = *content;
     if (data.empty()) {
         return std::nullopt; // kernel threads and zombies have an empty cmdline
     }
@@ -236,15 +279,26 @@ ProcessMonitor::ProcessMonitor() : isEnabled_(false), thread_(nullptr), sock_(-1
 
 ProcessMonitor::~ProcessMonitor()
 {
-    stopMonitoring();
+    // Never throw from a destructor: this runs inside exit() (SIGTERM path), and a throw here
+    // (e.g. std::system_error from a join racing a dying worker) aborts the helper instead of
+    // shutting it down.
+    try {
+        stopMonitoring();
 
-    {
-        std::lock_guard<std::mutex> guard(rulesMutex_);
-        rulesStop_ = true;
-    }
-    rulesCv_.notify_all();
-    if (rulesThread_.joinable()) {
-        rulesThread_.join();
+        {
+            std::lock_guard<std::mutex> guard(rulesMutex_);
+            rulesStop_ = true;
+        }
+        rulesCv_.notify_all();
+        if (rulesThread_.joinable()) {
+            rulesThread_.join();
+        }
+    } catch (const std::exception &e) {
+        // Best effort only — the process is on its way out.
+        try {
+            spdlog::warn("ProcessMonitor: shutdown error: {}", e.what());
+        } catch (...) {
+        }
     }
 }
 
@@ -524,9 +578,13 @@ std::vector<pid_t> ProcessMonitor::expandToDescendants(const std::vector<pid_t> 
         if (ep->d_type != DT_DIR || ep->d_name[0] < '0' || ep->d_name[0] > '9') {
             continue;
         }
-        std::ifstream f(std::string("/proc/") + ep->d_name + "/stat");
+        const auto statContent = readSmallFileNoThrow(std::string("/proc/") + ep->d_name + "/stat");
+        if (!statContent) {
+            continue;
+        }
+        std::istringstream statStream(*statContent);
         std::string line;
-        if (!std::getline(f, line)) {
+        if (!std::getline(statStream, line)) {
             continue;
         }
         // pid (comm) state ppid ...: comm may contain spaces or parens, so parse after the
@@ -710,14 +768,16 @@ bool ProcessMonitor::compareCmd(pid_t pid, const std::vector<AppRule> &rules) {
 
 std::optional<std::string> ProcessMonitor::getFlatpakAppIdByPid(pid_t pid)
 {
-    std::ifstream f("/proc/" + std::to_string(pid) + "/cgroup");
-    if (!f.is_open()) {
+    // Exception-free read (see readSmallFileNoThrow): the process can vanish mid-read.
+    const auto content = readSmallFileNoThrow("/proc/" + std::to_string(pid) + "/cgroup");
+    if (!content) {
         return std::nullopt;
     }
 
     const std::string marker = "app-flatpak-";
     const std::string scopeSuffix = ".scope";
 
+    std::istringstream f(*content);
     std::string line;
     while (std::getline(f, line)) {
         size_t mpos = line.find(marker);
